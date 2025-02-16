@@ -1,6 +1,8 @@
 import copy
 import math
 import hashlib
+import numpy as np
+from game import NUM_BOARDS, BOARD_ROWS, BOARD_COLS, piece_to_int, board_state_hash_numpy
 
 piece_values = {
     "King": 10000,
@@ -35,21 +37,22 @@ def is_enemy(pos, board, color):
     piece = board.get(pos)
     return piece is not None and piece.color != color
 
-def board_state_hash(state):
-    """Compute a hash for the given state.
-       state is a tuple: (board, turn)
-       We create a string based on sorted board positions.
-    """
-    board, turn = state
-    items = []
-    for pos in sorted(board.keys()):
-        piece = board[pos]
+# NEW: Convert dictionary board to a NumPy array.
+def dict_to_numpy(board):
+    np_board = np.zeros((NUM_BOARDS, BOARD_ROWS, BOARD_COLS), dtype=np.int16)
+    for pos, piece in board.items():
+        layer, row, col = pos
         if piece:
-            items.append(f"{pos}:{piece.name}:{piece.color}")
+            np_board[layer, row, col] = piece_to_int.get(piece.symbol, 0)
         else:
-            items.append(f"{pos}:None")
-    state_str = "".join(items) + turn
-    return hashlib.sha256(state_str.encode()).hexdigest()
+            np_board[layer, row, col] = 0
+    return np_board
+
+# NEW: Use the NumPy hash for state hashing.
+def board_state_hash(state):
+    board, turn = state
+    np_board = dict_to_numpy(board)
+    return board_state_hash_numpy(np_board, turn)
 
 def get_all_moves(state, color):
     board, turn = state
@@ -80,14 +83,10 @@ def get_all_moves(state, color):
                         moves.append(move)
                 else:
                     moves.append(move)
-
-    moves.sort(key=lambda m: 0 if (len(m) == 3 and m[2] in ["capture", "afar"]) else 1)
+    moves.sort(key=lambda m: 0 if (len(m)==3 and m[2] in ["capture","afar"]) else 1)
     return moves
 
 def evaluate_state(state, my_color, history):
-    """Evaluate the state by summing piece values and subtracting a repetition penalty.
-       'history' is a list of board state hashes from the Game's state_history.
-    """
     board, turn = state
     score = 0
     for pos, piece in board.items():
@@ -97,7 +96,7 @@ def evaluate_state(state, my_color, history):
                 score += val
             else:
                 score -= val
-    # Compute state hash for the current state.
+    # Use our fast hash.
     h = board_state_hash(state)
     repetition_count = history.count(h)
     penalty = repetition_count * 5000
@@ -105,7 +104,7 @@ def evaluate_state(state, my_color, history):
 
 def simulate_move(state, move):
     board, turn = state
-    new_board = copy.deepcopy(board)
+    new_board = copy.deepcopy(board)  # Consider writing a custom board copy if needed.
     if len(move) == 2:
         start, end = move
         flag = "quiet"
@@ -123,7 +122,6 @@ def simulate_move(state, move):
         new_board[start] = None
     new_turn = "Scarlet" if turn == "Gold" else "Gold"
     return (new_board, new_turn)
-
 
 transposition_table = {}
 
@@ -145,7 +143,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
         max_eval = -math.inf
         for move in moves:
             new_state = simulate_move(state, move)
-            eval_val, _ = alphabeta(new_state, depth - 1, alpha, beta, False, my_color, history)
+            eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, False, my_color, history)
             if eval_val > max_eval:
                 max_eval = eval_val
                 best_move = move
@@ -158,7 +156,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
         min_eval = math.inf
         for move in moves:
             new_state = simulate_move(state, move)
-            eval_val, _ = alphabeta(new_state, depth - 1, alpha, beta, True, my_color, history)
+            eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, True, my_color, history)
             if eval_val < min_eval:
                 min_eval = eval_val
                 best_move = move
@@ -172,10 +170,10 @@ class CustomAI:
     def __init__(self, game, color):
         self.game = game
         self.color = color
-        self.depth = 2 
+        self.depth = 2  # Increase as performance permits.
 
     def choose_move(self):
         state = (copy.deepcopy(self.game.board), self.game.current_turn)
-        history = self.game.state_history 
+        history = self.game.state_history
         eval_val, best_move = alphabeta(state, self.depth, -math.inf, math.inf, True, self.color, history)
         return best_move

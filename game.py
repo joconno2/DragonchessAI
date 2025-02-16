@@ -1,6 +1,7 @@
 import hashlib
 import os
 import pygame
+import numpy as np
 from pieces import create_initial_setup
 
 # Board/layout constants.
@@ -16,22 +17,50 @@ BOARD_TOP_MARGIN    = 60
 BOARD_BOTTOM_MARGIN = 20
 SIDE_PANEL_WIDTH    = 200
 
-def board_state_hash(board, turn):
-    """
-    Create a simple hash string for the board state.
-    We sort the board positions, and for each occupied square record its position, piece name, and color.
-    Then we combine that with the turn.
-    """
-    items = []
-    for pos in sorted(board.keys()):
-        piece = board[pos]
-        if piece:
-            items.append(f"{pos}:{piece.name}:{piece.color}")
-        else:
-            items.append(f"{pos}:None")
-    state_str = "".join(items) + turn
-    return hashlib.sha256(state_str.encode()).hexdigest()
+# --- Mapping from piece symbol to integer code ---
+# (Positive for Gold; negative for Scarlet.)
+piece_to_int = {
+    "gold_sylph":      1,
+    "scarlet_sylph":  -1,
+    "gold_griffin":    2,
+    "scarlet_griffin": -2,
+    "gold_dragon":     3,
+    "scarlet_dragon": -3,
+    "gold_oliphant":   4,
+    "scarlet_oliphant":-4,
+    "gold_unicorn":    5,
+    "scarlet_unicorn": -5,
+    "gold_hero":       6,
+    "scarlet_hero":    -6,
+    "gold_thief":      7,
+    "scarlet_thief":   -7,
+    "gold_cleric":     8,
+    "scarlet_cleric":  -8,
+    "gold_mage":       9,
+    "scarlet_mage":    -9,
+    "gold_king":       10,
+    "scarlet_king":    -10,
+    "gold_paladin":    11,
+    "scarlet_paladin": -11,
+    "gold_warrior":    12,
+    "scarlet_warrior": -12,
+    "gold_basilisk":   13,
+    "scarlet_basilisk":-13,
+    "gold_elemental":  14,
+    "scarlet_elemental": -14,
+    "gold_dwarf":      15,
+    "scarlet_dwarf":   -15
+}
 
+
+
+# --- New: Fast state hash using NumPy ---
+def board_state_hash_numpy(np_board, turn):
+    """
+    Compute a hash for the state given a NumPy array representation of the board.
+    """
+    state_bytes = np_board.tobytes() + turn.encode()
+    return hashlib.sha256(state_bytes).hexdigest()
 
 # --- Helper functions for Algebraic Notation ---
 def coord_to_algebraic(pos):
@@ -70,7 +99,7 @@ class Game:
         self.winner = None
         self.game_log = []  # List of algebraic move strings.
         self.state_history = []    
-        self.no_capture_count = 0  # NEW: count consecutive moves with no capture.
+        self.no_capture_count = 0  # Count consecutive moves with no capture.
 
     def load_board(self):
         for layer in range(NUM_BOARDS):
@@ -98,7 +127,7 @@ class Game:
                 except Exception as e:
                     surf = pygame.Surface((self.cell_size, self.cell_size))
                     surf.fill((200,200,200))
-                    font = pygame.font.SysFont("Arial", 24)
+                    font = pygame.font.Font("font.ttf", 24)
                     text = font.render(key, True, (0,0,0))
                     surf.blit(text, (5,5))
                     self.assets[key] = surf
@@ -106,6 +135,21 @@ class Game:
     def set_cell_size(self, new_size):
         self.cell_size = new_size
         self.load_assets()
+
+    def get_numpy_board(self):
+        """
+        Convert the dictionary board into a NumPy array of shape (NUM_BOARDS, BOARD_ROWS, BOARD_COLS)
+        where each cell contains an integer code (0 if empty).
+        """
+        np_board = np.zeros((NUM_BOARDS, BOARD_ROWS, BOARD_COLS), dtype=np.int16)
+        for pos, piece in self.board.items():
+            layer, row, col = pos
+            if piece:
+                # Use our mapping. We assume piece.symbol returns keys like "gold_sylph".
+                np_board[layer, row, col] = piece_to_int.get(piece.symbol, 0)
+            else:
+                np_board[layer, row, col] = 0
+        return np_board
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -178,7 +222,7 @@ class Game:
             board_rect = pygame.Rect(board_x_start, board_y_start, board_width, board_height)
             pygame.draw.rect(self.screen, (0,0,0), board_rect, 3)
             titles = ["Sky", "Ground", "Underworld"]
-            title_font = pygame.font.SysFont("Arial", 28)
+            title_font = pygame.font.Font("font.ttf", 34)
             title_surf = title_font.render(titles[layer], True, (255,255,255))
             title_rect = title_surf.get_rect(center=(board_x_start + board_width//2, BOARD_TOP_MARGIN//2))
             self.screen.blit(title_surf, title_rect)
@@ -194,10 +238,9 @@ class Game:
                 if img:
                     self.screen.blit(img, rect.topleft)
                 else:
-                    piece_font = pygame.font.SysFont("Arial", 24)
+                    piece_font = pygame.font.Font("font.ttf", 26)
                     text = piece_font.render(piece.symbol, True, (0,0,0))
                     self.screen.blit(text, rect.topleft)
-                # Overlay a blue tint if the piece is frozen.
                 if hasattr(piece, "frozen") and piece.frozen:
                     overlay = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
                     overlay.fill((0, 150, 255, 100))
@@ -207,7 +250,7 @@ class Game:
         pane_rect = pygame.Rect(total_width - SIDE_PANEL_WIDTH, 0, SIDE_PANEL_WIDTH, total_height)
         pygame.draw.rect(self.screen, (30, 30, 30), pane_rect)
         pygame.draw.rect(self.screen, (0, 0, 0), pane_rect, 3)
-        log_title_font = pygame.font.SysFont("Arial", 24)
+        log_title_font = pygame.font.Font("font.ttf", 30)
         log_font = pygame.font.SysFont("Arial", 20)
         title_surf = log_title_font.render("Game Log", True, (255,255,255))
         self.screen.blit(title_surf, (pane_rect.x + 10, 10))
@@ -222,7 +265,7 @@ class Game:
             overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
             self.screen.blit(overlay, (0, 0))
-            game_over_font = pygame.font.SysFont("Arial", 48)
+            game_over_font = pygame.font.Font("font.ttf", 48)
             message = f"Game Over! Winner: {self.winner}"
             text_surf = game_over_font.render(message, True, (255,255,255))
             text_rect = text_surf.get_rect(center=self.screen.get_rect().center)
@@ -261,11 +304,11 @@ class Game:
     def is_within_bounds(self, pos):
         layer, row, col = pos
         return 0 <= layer < NUM_BOARDS and 0 <= row < BOARD_ROWS and 0 <= col < BOARD_COLS
+
     def make_move(self, move):
         start, end, flag = move if len(move) == 3 else (move[0], move[1], "quiet")
         piece = self.board[start]
         dest_piece = self.board[end]
-        # Log the move in algebraic notation.
         alg_move = move_to_algebraic(piece, start, end, flag)
         self.game_log.append(alg_move)
         capture_occurred = False
@@ -279,23 +322,20 @@ class Game:
                 capture_occurred = True
             self.board[end] = piece
             self.board[start] = None
-        # Reset the no-capture counter if a capture occurred, else increment.
         if capture_occurred:
             self.no_capture_count = 0
         else:
             self.no_capture_count += 1
-        current_state_hash = board_state_hash(self.board, self.current_turn)
+        # Use the new fast NumPy board hash.
+        np_board = self.get_numpy_board()
+        current_state_hash = board_state_hash_numpy(np_board, self.current_turn)
         self.state_history.append(current_state_hash)
         self.current_turn = "Scarlet" if self.current_turn == "Gold" else "Gold"
 
     def update(self):
-        # --- FREEZING LOGIC ---
-        # Unfreeze all pieces on the middle board.
         for pos, piece in self.board.items():
             if piece is not None and pos[0] == 1:
                 piece.frozen = False
-        # For every Basilisk on the bottom board, freeze the opposing piece
-        # directly above it on the middle board.
         for pos, piece in self.board.items():
             if piece is not None and piece.name.lower() == "basilisk" and pos[0] == 2:
                 layer, row, col = pos
@@ -303,14 +343,9 @@ class Game:
                 target = self.board.get(above)
                 if target is not None and target.color != piece.color:
                     target.frozen = True
-
-        # --- FIFTY-MOVE DRAW RULE ---
-        # If no capture has occurred for 50 moves, declare the game a draw.
         if self.no_capture_count >= 50:
             self.game_over = True
             self.winner = "Draw"
-
-        # --- WIN CONDITION CHECK ---
         gold_king_found = False
         scarlet_king_found = False
         for pos, piece in self.board.items():
@@ -325,3 +360,13 @@ class Game:
         elif not scarlet_king_found:
             self.game_over = True
             self.winner = "Gold"
+
+    def get_numpy_board(self):
+        np_board = np.zeros((NUM_BOARDS, BOARD_ROWS, BOARD_COLS), dtype=np.int16)
+        for pos, piece in self.board.items():
+            layer, row, col = pos
+            if piece:
+                np_board[layer, row, col] = piece_to_int.get(piece.symbol, 0)
+            else:
+                np_board[layer, row, col] = 0
+        return np_board
