@@ -47,19 +47,15 @@ def run_menu():
     custom_ai = {"scarlet": None, "gold": None}
     clock = pygame.time.Clock()
     running = True
-
-    # We'll use a variable to hold any active file dialog window.
     active_file_dialog = None
 
     while running:
         time_delta = clock.tick(60) / 1000.0
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
 
-            # Process pygame_gui events.
             if event.type == pygame.USEREVENT:
                 if event.user_type == pygame_gui.UI_BUTTON_PRESSED:
                     if event.ui_element == button_2_player:
@@ -76,24 +72,28 @@ def run_menu():
                         running = False
                     elif event.ui_element == button_browse_scarlet:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            relative_rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((100, 50), (400, 300)),
                             manager=manager,
                             window_title="Select Scarlet AI File",
                             initial_file_path=os.getcwd()
                         )
+                        # Set our custom attribute:
+                        active_file_dialog.custom_title = "Select Scarlet AI File"
                     elif event.ui_element == button_browse_gold:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            relative_rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((100, 50), (400, 300)),
                             manager=manager,
                             window_title="Select Gold AI File",
                             initial_file_path=os.getcwd()
                         )
-                # Catch file dialog result events.
+                        active_file_dialog.custom_title = "Select Gold AI File"
                 if event.user_type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
-                    if event.ui_element.window_title == "Select Scarlet AI File":
-                        custom_ai["scarlet"] = event.text  # event.text is the chosen file path.
-                    elif event.ui_element.window_title == "Select Gold AI File":
-                        custom_ai["gold"] = event.text
+                    # Check our custom_title attribute instead.
+                    if hasattr(event.ui_element, "custom_title"):
+                        if event.ui_element.custom_title == "Select Scarlet AI File":
+                            custom_ai["scarlet"] = event.text
+                        elif event.ui_element.custom_title == "Select Gold AI File":
+                            custom_ai["gold"] = event.text
 
             manager.process_events(event)
         manager.update(time_delta)
@@ -105,21 +105,11 @@ def run_menu():
 
 
 def run_ai_vs_ai_menu():
-    """
-    Displays a dedicated menu for AI vs AI options.
-    Returns a dictionary with keys:
-      "num_games" (int),
-      "log_filename" (str),
-      "headless" (bool),
-      "scarlet_ai" (filepath or None),
-      "gold_ai" (filepath or None)
-    """
     pygame.init()
     screen = pygame.display.set_mode((600, 500))
     pygame.display.set_caption("AI vs AI Options")
     manager = pygame_gui.UIManager((600, 500))
 
-    # Create UI elements.
     label_num_games = pygame_gui.elements.UILabel(
         relative_rect=pygame.Rect((50, 50), (200, 40)),
         text="Number of Games:",
@@ -173,7 +163,7 @@ def run_ai_vs_ai_menu():
     options = {
         "num_games": 10,
         "log_filename": "ai_vs_ai_log.csv",
-        "headless": False,
+        "headless": True,
         "scarlet_ai": None,
         "gold_ai": None
     }
@@ -184,7 +174,6 @@ def run_ai_vs_ai_menu():
 
     while running:
         time_delta = clock.tick(60) / 1000.0
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -193,23 +182,24 @@ def run_ai_vs_ai_menu():
             if event.type == pygame.USEREVENT:
                 if event.user_type == pygame_gui.UI_BUTTON_PRESSED:
                     if event.ui_element == button_headless_toggle:
-                        # Toggle headless mode.
                         options["headless"] = not options["headless"]
                         event.ui_element.set_text("Yes" if options["headless"] else "No")
                     elif event.ui_element == button_browse_scarlet:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            relative_rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((100, 50), (400, 300)),
                             manager=manager,
                             window_title="Select Scarlet AI File",
                             initial_file_path=os.getcwd()
                         )
+                        active_file_dialog.custom_title = "Select Scarlet AI File"
                     elif event.ui_element == button_browse_gold:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            relative_rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((100, 50), (400, 300)),
                             manager=manager,
                             window_title="Select Gold AI File",
                             initial_file_path=os.getcwd()
                         )
+                        active_file_dialog.custom_title = "Select Gold AI File"
                     elif event.ui_element == button_start:
                         try:
                             options["num_games"] = int(input_num_games.get_text())
@@ -218,15 +208,15 @@ def run_ai_vs_ai_menu():
                         options["log_filename"] = input_log_filename.get_text() or "ai_vs_ai_log.csv"
                         running = False
                 if event.user_type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
-                    if event.ui_element.window_title == "Select Scarlet AI File":
-                        options["scarlet_ai"] = event.text
-                    elif event.ui_element.window_title == "Select Gold AI File":
-                        options["gold_ai"] = event.text
+                    if hasattr(event.ui_element, "custom_title"):
+                        if event.ui_element.custom_title == "Select Scarlet AI File":
+                            options["scarlet_ai"] = event.text
+                        elif event.ui_element.custom_title == "Select Gold AI File":
+                            options["gold_ai"] = event.text
 
             manager.process_events(event)
         manager.update(time_delta)
         screen.fill((50, 50, 50))
         manager.draw_ui(screen)
         pygame.display.update()
-
     return options
