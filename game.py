@@ -1,31 +1,40 @@
+import hashlib
 import os
-import sys
-import io
 import pygame
-import cairosvg
 from pieces import create_initial_setup
 
 # Board/layout constants.
-DEFAULT_CELL_SIZE  = 40
-BOARD_COLS         = 12
-BOARD_ROWS         = 8
-NUM_BOARDS         = 3
+DEFAULT_CELL_SIZE   = 40
+BOARD_COLS          = 12
+BOARD_ROWS          = 8
+NUM_BOARDS          = 3
 
 # Layout and UI constants.
-BOARD_LEFT_MARGIN  = 20        # Left margin for boards.
-BOARD_GAP          = 20        # Gap between boards.
-BOARD_TOP_MARGIN   = 60        # Top margin (for board titles).
-BOARD_BOTTOM_MARGIN= 20
-SIDE_PANEL_WIDTH   = 200       # Width for the move log pane.
+BOARD_LEFT_MARGIN   = 20
+BOARD_GAP           = 20
+BOARD_TOP_MARGIN    = 60
+BOARD_BOTTOM_MARGIN = 20
+SIDE_PANEL_WIDTH    = 200
+
+def board_state_hash(board, turn):
+    """
+    Create a simple hash string for the board state.
+    We sort the board positions, and for each occupied square record its position, piece name, and color.
+    Then we combine that with the turn.
+    """
+    items = []
+    for pos in sorted(board.keys()):
+        piece = board[pos]
+        if piece:
+            items.append(f"{pos}:{piece.name}:{piece.color}")
+        else:
+            items.append(f"{pos}:None")
+    state_str = "".join(items) + turn
+    return hashlib.sha256(state_str.encode()).hexdigest()
 
 
+# --- Helper functions for Algebraic Notation ---
 def coord_to_algebraic(pos):
-    """
-    Convert board coordinate (layer, row, col) to algebraic notation.
-    Board number = layer+1,
-    File letter: 0 -> a, 1 -> b, …, 11 -> l,
-    Rank: 8 - row (since row 0 is top and row 7 is bottom).
-    """
     layer, row, col = pos
     board_num = layer + 1
     file_letter = chr(ord('a') + col)
@@ -33,10 +42,6 @@ def coord_to_algebraic(pos):
     return f"{board_num}{file_letter}{rank}"
 
 def get_piece_letter(piece):
-    """
-    Return the letter used for logging this piece.
-    For Dragon, always use R (or r for Scarlet); for others, use the first letter.
-    """
     if piece.name.lower() == "dragon":
         return "R" if piece.color == "Gold" else "r"
     else:
@@ -44,24 +49,10 @@ def get_piece_letter(piece):
         return letter.upper() if piece.color == "Gold" else letter.lower()
 
 def move_to_algebraic(piece, start, end, flag):
-    """
-    Convert a move into algebraic notation.
-    Uses 'x' for capture/afar moves and '-' for non-capturing moves.
-    """
     start_alg = coord_to_algebraic(start)
     end_alg   = coord_to_algebraic(end)
     sep = "x" if flag in ["capture", "afar"] else "-"
     return f"{get_piece_letter(piece)}{start_alg}{sep}{end_alg}"
-
-
-def load_svg_image(filepath, size):
-    """
-    Convert the SVG file at filepath into a pygame Surface scaled to 'size',
-    using cairosvg to produce PNG data in memory.
-    """
-    png_data = cairosvg.svg2png(url=filepath, output_width=size[0], output_height=size[1])
-    image = pygame.image.load(io.BytesIO(png_data))
-    return image
 
 # --- The Game Class ---
 class Game:
@@ -69,7 +60,7 @@ class Game:
         self.screen = screen
         self.headless = headless
         self.cell_size = DEFAULT_CELL_SIZE
-        self.current_turn = "Gold"  # Gold moves first.
+        self.current_turn = "Gold"
         self.selected_piece = None
         self.selected_pos = None
         self.board = {}
@@ -78,9 +69,10 @@ class Game:
         self.game_over = False
         self.winner = None
         self.game_log = []  # List of algebraic move strings.
+        self.state_history = []    
+        self.no_capture_count = 0  # NEW: count consecutive moves with no capture.
 
     def load_board(self):
-        # Create an empty board.
         for layer in range(NUM_BOARDS):
             for row in range(BOARD_ROWS):
                 for col in range(BOARD_COLS):
@@ -91,13 +83,6 @@ class Game:
 
     def load_assets(self):
         self.assets = {}
-        # Determine base path: if running in a PyInstaller bundle, use sys._MEIPASS.
-        if hasattr(sys, '_MEIPASS'):
-            base_path = sys._MEIPASS
-        else:
-            base_path = os.path.abspath(".")
-        assets_dir = os.path.join(base_path, "assets")
-
         colors = ["gold", "scarlet"]
         piece_names = ["sylph", "griffin", "dragon", "oliphant", "unicorn", "hero",
                        "thief", "cleric", "mage", "king", "paladin", "warrior",
@@ -105,13 +90,12 @@ class Game:
         for color in colors:
             for name in piece_names:
                 key = f"{color}_{name}"
-                png_path = os.path.join(assets_dir, f"{key}.png")
+                png_path = os.path.join("assets", f"{key}.png")
                 try:
                     image = pygame.image.load(png_path)
                     image = pygame.transform.scale(image, (self.cell_size, self.cell_size))
                     self.assets[key] = image
                 except Exception as e:
-                    # If image loading fails, create a placeholder.
                     surf = pygame.Surface((self.cell_size, self.cell_size))
                     surf.fill((200,200,200))
                     font = pygame.font.SysFont("Arial", 24)
@@ -119,9 +103,7 @@ class Game:
                     surf.blit(text, (5,5))
                     self.assets[key] = surf
 
-
     def set_cell_size(self, new_size):
-        """Update the cell size and reload assets accordingly."""
         self.cell_size = new_size
         self.load_assets()
 
@@ -176,8 +158,6 @@ class Game:
         self.screen.fill((50, 50, 50))
         board_width = BOARD_COLS * self.cell_size
         board_height = BOARD_ROWS * self.cell_size
-
-        # Draw each board.
         for layer in range(NUM_BOARDS):
             board_x_start = BOARD_LEFT_MARGIN + layer * (board_width + BOARD_GAP)
             board_y_start = BOARD_TOP_MARGIN
@@ -197,13 +177,11 @@ class Game:
                                 pygame.draw.rect(self.screen, (0,0,255), rect, 3)
             board_rect = pygame.Rect(board_x_start, board_y_start, board_width, board_height)
             pygame.draw.rect(self.screen, (0,0,0), board_rect, 3)
-            # Draw board title above the board.
             titles = ["Sky", "Ground", "Underworld"]
             title_font = pygame.font.SysFont("Arial", 28)
             title_surf = title_font.render(titles[layer], True, (255,255,255))
             title_rect = title_surf.get_rect(center=(board_x_start + board_width//2, BOARD_TOP_MARGIN//2))
             self.screen.blit(title_surf, title_rect)
-        # Draw pieces.
         for pos, piece in self.board.items():
             if piece:
                 layer, row, col = pos
@@ -213,21 +191,17 @@ class Game:
                                    board_y_start + row * self.cell_size,
                                    self.cell_size, self.cell_size)
                 img = self.assets.get(piece.symbol)
-                # Draw the piece.
                 if img:
                     self.screen.blit(img, rect.topleft)
                 else:
                     piece_font = pygame.font.SysFont("Arial", 24)
                     text = piece_font.render(piece.symbol, True, (0,0,0))
                     self.screen.blit(text, rect.topleft)
-
-                # If the piece is frozen, overlay a subtle blue tint.
+                # Overlay a blue tint if the piece is frozen.
                 if hasattr(piece, "frozen") and piece.frozen:
                     overlay = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
-                    overlay.fill((0, 150, 255, 100))  # RGBA: blue with 100/255 alpha
+                    overlay.fill((0, 150, 255, 100))
                     self.screen.blit(overlay, rect.topleft)
-
-        # Draw move log pane.
         total_width = self.screen.get_width()
         total_height = self.screen.get_height()
         pane_rect = pygame.Rect(total_width - SIDE_PANEL_WIDTH, 0, SIDE_PANEL_WIDTH, total_height)
@@ -244,7 +218,6 @@ class Game:
             self.screen.blit(move_surf, (pane_rect.x + 10, y_offset))
             y_offset += line_spacing
 
-        # If game over, overlay a game-over message.
         if self.game_over:
             overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
@@ -256,7 +229,6 @@ class Game:
             self.screen.blit(text_surf, text_rect)
 
     def get_legal_moves(self, piece, pos):
-        # If the piece is frozen, it cannot move.
         if hasattr(piece, "frozen") and piece.frozen:
             return []
         moves = piece.get_moves(pos, self.board)
@@ -289,30 +261,41 @@ class Game:
     def is_within_bounds(self, pos):
         layer, row, col = pos
         return 0 <= layer < NUM_BOARDS and 0 <= row < BOARD_ROWS and 0 <= col < BOARD_COLS
-
     def make_move(self, move):
         start, end, flag = move if len(move) == 3 else (move[0], move[1], "quiet")
         piece = self.board[start]
         dest_piece = self.board[end]
+        # Log the move in algebraic notation.
         alg_move = move_to_algebraic(piece, start, end, flag)
         self.game_log.append(alg_move)
+        capture_occurred = False
         if flag == "afar":
             if dest_piece is not None and dest_piece.color != piece.color:
                 self.board[end] = None
+                capture_occurred = True
         else:
             if dest_piece is not None and dest_piece.color != piece.color:
                 self.board[end] = None
+                capture_occurred = True
             self.board[end] = piece
             self.board[start] = None
+        # Reset the no-capture counter if a capture occurred, else increment.
+        if capture_occurred:
+            self.no_capture_count = 0
+        else:
+            self.no_capture_count += 1
+        current_state_hash = board_state_hash(self.board, self.current_turn)
+        self.state_history.append(current_state_hash)
         self.current_turn = "Scarlet" if self.current_turn == "Gold" else "Gold"
 
     def update(self):
-        # First, unfreeze all pieces on the middle board.
+        # --- FREEZING LOGIC ---
+        # Unfreeze all pieces on the middle board.
         for pos, piece in self.board.items():
             if piece is not None and pos[0] == 1:
                 piece.frozen = False
-        # Then, for every Basilisk on the bottom board, freeze the opposing piece
-        # (if any) directly above it on the middle board.
+        # For every Basilisk on the bottom board, freeze the opposing piece
+        # directly above it on the middle board.
         for pos, piece in self.board.items():
             if piece is not None and piece.name.lower() == "basilisk" and pos[0] == 2:
                 layer, row, col = pos
@@ -320,6 +303,12 @@ class Game:
                 target = self.board.get(above)
                 if target is not None and target.color != piece.color:
                     target.frozen = True
+
+        # --- FIFTY-MOVE DRAW RULE ---
+        # If no capture has occurred for 50 moves, declare the game a draw.
+        if self.no_capture_count >= 50:
+            self.game_over = True
+            self.winner = "Draw"
 
         # --- WIN CONDITION CHECK ---
         gold_king_found = False
