@@ -9,7 +9,6 @@ def run_menu():
     pygame.display.set_caption("Dragonchess Menu")
     manager = pygame_gui.UIManager((600, 400))
 
-    # Create main menu buttons.
     button_2_player = pygame_gui.elements.UIButton(
         relative_rect=pygame.Rect((200, 50), (200, 50)),
         text='2 Player',
@@ -31,7 +30,6 @@ def run_menu():
         manager=manager
     )
 
-    # Create browse buttons for custom AI files.
     button_browse_scarlet = pygame_gui.elements.UIButton(
         relative_rect=pygame.Rect((200, 330), (90, 40)),
         text='Browse Scarlet',
@@ -77,7 +75,6 @@ def run_menu():
                             window_title="Select Scarlet AI File",
                             initial_file_path=os.getcwd()
                         )
-                        # Set our custom attribute:
                         active_file_dialog.custom_title = "Select Scarlet AI File"
                     elif event.ui_element == button_browse_gold:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
@@ -88,7 +85,6 @@ def run_menu():
                         )
                         active_file_dialog.custom_title = "Select Gold AI File"
                 if event.user_type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
-                    # Check our custom_title attribute instead.
                     if hasattr(event.ui_element, "custom_title"):
                         if event.ui_element.custom_title == "Select Scarlet AI File":
                             custom_ai["scarlet"] = event.text
@@ -102,7 +98,6 @@ def run_menu():
         pygame.display.update()
 
     return mode, custom_ai
-
 
 def run_ai_vs_ai_menu():
     pygame.init()

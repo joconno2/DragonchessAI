@@ -137,7 +137,7 @@ class CustomAI:
     """
     A Monte Carlo Tree Search AI for Dragonchess.
     """
-    def __init__(self, game, color, iterations=50):
+    def __init__(self, game, color, iterations=500):
         self.game = game
         self.color = color
         self.iterations = iterations

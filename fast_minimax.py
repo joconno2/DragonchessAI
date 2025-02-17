@@ -170,7 +170,7 @@ class CustomAI:
     def __init__(self, game, color):
         self.game = game
         self.color = color
-        self.depth = 2  # Increase as performance permits.
+        self.depth = 3  # Increase as performance permits.
 
     def choose_move(self):
         state = (copy.deepcopy(self.game.board), self.game.current_turn)
