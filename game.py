@@ -105,7 +105,7 @@ class Game:
                     target = self.board[idx_middle]
                     if target != 0 and (target * piece < 0):
                         self.frozen[idx_middle] = True
-        if self.no_capture_count >= 50:
+        if self.no_capture_count >= 250:
             self.game_over = True
             self.winner = "Draw"
         gold_king_exists = False

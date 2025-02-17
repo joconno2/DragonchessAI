@@ -1,4 +1,4 @@
-import sys, os, pygame
+import sys, os, pygame, importlib.util
 from menu import run_menu, run_ai_vs_ai_menu
 from game import Game, pos_to_index, index_to_pos
 from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS
@@ -60,6 +60,13 @@ def load_assets(cell_size):
             assets[code] = None
     return assets
 
+def load_custom_ai(filepath, game, color):
+    """Dynamically load a custom AI from a given file path."""
+    spec = importlib.util.spec_from_file_location("custom_ai", filepath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.CustomAI(game, color)
+
 def draw_board(screen, game, assets, selected_index=None, legal_destinations=None):
     screen.fill(BG_COLOR)
     board_width = BOARD_COLS * CELL_SIZE
@@ -98,7 +105,7 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
         board_rect = pygame.Rect(board_x_start, board_y_start, board_width, board_height)
         pygame.draw.rect(screen, LINE_COLOR, board_rect, 3)
         titles = ["Sky", "Ground", "Underworld"]
-        title_font = pygame.font.Font("assets/font.ttf", 34)
+        title_font = pygame.font.SysFont("Arial", 30)
         title_text = title_font.render(titles[layer], True, (255,255,255))
         title_rect = title_text.get_rect(center=(board_x_start + board_width//2, BOARD_TOP_MARGIN//2))
         screen.blit(title_text, title_rect)
@@ -142,7 +149,7 @@ def draw_game_over(screen, message, win_width, win_height):
 
 def main():
     pygame.init()
-    mode, custom_ai = run_menu()
+    mode, custom_ai_menu = run_menu()
     if mode == "AI vs AI":
         options = run_ai_vs_ai_menu()
         headless = options["headless"]
@@ -164,6 +171,7 @@ def main():
     assets = load_assets(CELL_SIZE)
     clock = pygame.time.Clock()
 
+    # AI vs AI mode: load custom AIs if provided.
     if mode == "AI vs AI":
         import csv
         log_filename = options["log_filename"]
@@ -173,8 +181,15 @@ def main():
             writer.writeheader()
             for game_num in range(1, num_games+1):
                 game = Game()
-                ai_gold = RandomAI(game, "Gold")
-                ai_scarlet = RandomAI(game, "Scarlet")
+                # Check for custom AI paths provided in the menu options.
+                if options.get("gold_ai"):
+                    ai_gold = load_custom_ai(options["gold_ai"], game, "Gold")
+                else:
+                    ai_gold = RandomAI(game, "Gold")
+                if options.get("scarlet_ai"):
+                    ai_scarlet = load_custom_ai(options["scarlet_ai"], game, "Scarlet")
+                else:
+                    ai_scarlet = RandomAI(game, "Scarlet")
                 while not game.game_over:
                     for event in pygame.event.get():
                         if event.type == pygame.QUIT:
@@ -203,9 +218,9 @@ def main():
         ai = None
         two_player = (mode == "2 Player")
         if mode == "AI as Scarlet":
-            ai = RandomAI(game, "Scarlet")
+            ai = load_custom_ai(custom_ai_menu["scarlet"], game, "Scarlet") if custom_ai_menu["scarlet"] else RandomAI(game, "Scarlet")
         elif mode == "AI as Gold":
-            ai = RandomAI(game, "Gold")
+            ai = load_custom_ai(custom_ai_menu["gold"], game, "Gold") if custom_ai_menu["gold"] else RandomAI(game, "Gold")
         selected_index = None
         running = True
         while running and not game.game_over:
@@ -245,8 +260,7 @@ def main():
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
-                if ai and ((mode == "AI as Gold" and game.current_turn == "Gold") or 
-                           (mode == "AI as Scarlet" and game.current_turn == "Scarlet")):
+                if ai and ((mode == "AI as Gold" and game.current_turn == "Gold") or (mode == "AI as Scarlet" and game.current_turn == "Scarlet")):
                     move = ai.choose_move()
                     if move:
                         game.make_move(move)
@@ -257,7 +271,7 @@ def main():
             if screen:
                 draw_board(screen, game, assets, selected_index, legal_destinations)
                 pygame.display.flip()
-            # No rendering delay now.
+            # No delay here for maximum speed.
         if screen and two_player:
             draw_game_over(screen, game.winner, win_width, win_height)
     pygame.quit()

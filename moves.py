@@ -1,7 +1,7 @@
 from numba import njit
 from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS, pos_to_index
 
-# Move flag constants
+# Move flag constants (use integers instead of strings)
 QUIET      = 0
 CAPTURE    = 1
 AFAR       = 2
@@ -17,9 +17,10 @@ def generate_sylph_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
-    direction = -1 if color == "Gold" else 1
+    # For Gold (color==1), we assume movement is upward (row decreases); for Scarlet (color==-1), downward.
+    direction = -1 if color == 1 else 1
     if layer == 0:
-        # Non-capturing diagonal moves
+        # Non-capturing: diagonal moves
         for dc in (-1, 1):
             new_row = row + direction
             new_col = col + dc
@@ -27,23 +28,23 @@ def generate_sylph_moves(pos, board, color):
                 to_idx = pos_to_index(layer, new_row, new_col)
                 if board[to_idx] == 0:
                     moves.append((from_idx, to_idx, QUIET))
-        # Capturing forward move
+        # Capturing: straight forward
         new_row = row + direction
         new_col = col
         if in_bounds(layer, new_row, new_col):
             moves.append((from_idx, pos_to_index(layer, new_row, new_col), CAPTURE))
-        # Capturing by moving down to the middle board
+        # Capturing: move down to middle board
         new_layer = 1
         if in_bounds(new_layer, row, col):
             moves.append((from_idx, pos_to_index(new_layer, row, col), CAPTURE))
     elif layer == 1:
-        # On middle board, can move back to top if empty
+        # On middle board, allow quiet move back to top board
         new_layer = 0
         if in_bounds(new_layer, row, col) and board[pos_to_index(new_layer, row, col)] == 0:
             moves.append((from_idx, pos_to_index(new_layer, row, col), QUIET))
-        # Also move to one of the home cells
+        # Also allow moves to designated home cells:
         target_layer = 0
-        if color == "Gold":
+        if color == 1:
             home_row = BOARD_ROWS - 1  # row 7
             for c in range(0, BOARD_COLS, 2):
                 if in_bounds(target_layer, home_row, c) and board[pos_to_index(target_layer, home_row, c)] == 0:
@@ -98,7 +99,7 @@ def generate_dragon_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 0:
         return moves
-    # King-like moves
+    # King–like moves (excluding the null move)
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
             if dr == 0 and dc == 0:
@@ -107,7 +108,7 @@ def generate_dragon_moves(pos, board, color):
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
                 moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
-    # Diagonal sliding moves (bishop-like)
+    # Bishop–like sliding moves (diagonals)
     for dr, dc in ((-1,-1), (-1,1), (1,-1), (1,1)):
         r = row
         c = col
@@ -119,7 +120,7 @@ def generate_dragon_moves(pos, board, color):
             moves.append((from_idx, pos_to_index(layer, r, c), AMBIGUOUS))
             if board[pos_to_index(layer, r, c)] != 0:
                 break
-    # Capture-from-afar moves (to middle board)
+    # "Capture from afar" moves (to middle board)
     target_layer = 1
     if in_bounds(target_layer, row, col):
         moves.append((from_idx, pos_to_index(target_layer, row, col), AFAR))
@@ -171,6 +172,7 @@ def generate_hero_moves(pos, board, color):
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
     if layer == 1:
+        # Move 1 or 2 cells diagonally.
         for dr in (-2, -1, 1, 2):
             for dc in (-2, -1, 1, 2):
                 if abs(dr) == abs(dc):
@@ -178,6 +180,7 @@ def generate_hero_moves(pos, board, color):
                     new_col = col + dc
                     if in_bounds(layer, new_row, new_col):
                         moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+        # Move to top or bottom board via diagonal.
         for target_layer in (0, 2):
             for dr in (-1, 1):
                 for dc in (-1, 1):
@@ -220,8 +223,11 @@ def generate_cleric_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
+    # Exclude the null move (dr=0, dc=0)
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
@@ -246,8 +252,7 @@ def generate_mage_moves(pos, board, color):
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
     if layer == 1:
-        directions = ((-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1))
-        for dr, dc in directions:
+        for dr, dc in ((-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)):
             r = row
             c = col
             while True:
@@ -327,14 +332,15 @@ def generate_paladin_moves(pos, board, color):
                 new_col = col + dc
                 if in_bounds(layer, new_row, new_col):
                     moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+    # 3D knight moves (unblockable)
     for d_layer in (-2, -1, 1, 2):
         for d_row in (-2, -1, 0, 1, 2):
             for d_col in (-2, -1, 0, 1, 2):
                 if d_layer == 0:
                     continue
-                diff = [abs(d_layer), abs(d_row), abs(d_col)]
-                diff.sort()
-                if diff[0] == 0 and diff[1] == 1 and diff[2] == 2:
+                diffs = [abs(d_layer), abs(d_row), abs(d_col)]
+                diffs.sort()
+                if diffs[0] == 0 and diffs[1] == 1 and diffs[2] == 2:
                     new_layer = layer + d_layer
                     new_row = row + d_row
                     new_col = col + d_col
@@ -349,7 +355,7 @@ def generate_warrior_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 1:
         return moves
-    direction = -1 if color == "Gold" else 1
+    direction = -1 if color == 1 else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
         moves.append((from_idx, pos_to_index(layer, new_row, col), QUIET))
@@ -366,7 +372,7 @@ def generate_basilisk_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 2:
         return moves
-    direction = -1 if color == "Gold" else 1
+    direction = -1 if color == 1 else 1
     for dc in (0, -1, 1):
         new_row = row + direction
         new_col = col + dc
@@ -391,7 +397,7 @@ def generate_elemental_moves(pos, board, color):
                     break
                 to_idx = pos_to_index(layer, new_row, new_col)
                 if dist == 1:
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color=="Gold" else -1) < 0):
+                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
@@ -399,7 +405,7 @@ def generate_elemental_moves(pos, board, color):
                     inter_idx = pos_to_index(layer, row + dr, col + dc)
                     if board[inter_idx] != 0:
                         break
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color=="Gold" else -1) < 0):
+                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
@@ -413,18 +419,17 @@ def generate_elemental_moves(pos, board, color):
             inter_col = col + dc
             target_layer = 1
             if in_bounds(layer, inter_row, inter_col) and board[pos_to_index(layer, inter_row, inter_col)] == 0:
-                if in_bounds(target_layer, row + dr, col + dc):
-                    moves.append((from_idx, pos_to_index(target_layer, row + dr, col + dc), CAPTURE))
+                moves.append((from_idx, pos_to_index(target_layer, row+dr, col+dc), CAPTURE))
     elif layer == 1:
         for dr, dc in ((1,0), (-1,0), (0,1), (0,-1)):
             inter_row = row + dr
             inter_col = col + dc
             target_layer = 2
             if in_bounds(layer, inter_row, inter_col) and board[pos_to_index(layer, inter_row, inter_col)] == 0:
-                to_idx = pos_to_index(target_layer, row + dr, col + dc)
+                to_idx = pos_to_index(target_layer, row+dr, col+dc)
                 if board[to_idx] == 0:
                     moves.append((from_idx, to_idx, QUIET))
-                elif board[to_idx] != 0 and board[to_idx] * (1 if color=="Gold" else -1) < 0:
+                elif board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0:
                     moves.append((from_idx, to_idx, CAPTURE))
     return moves
 
@@ -435,17 +440,17 @@ def generate_dwarf_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer not in (1, 2):
         return moves
-    direction = -1 if color == "Gold" else 1
+    direction = -1 if color == 1 else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
         moves.append((from_idx, pos_to_index(layer, new_row, col), QUIET))
     for dc in (-1, 1):
-        if in_bounds(layer, row, col + dc) and board[pos_to_index(layer, row, col + dc)] == 0:
-            moves.append((from_idx, pos_to_index(layer, row, col + dc), QUIET))
+        if in_bounds(layer, row, col+dc) and board[pos_to_index(layer, row, col+dc)] == 0:
+            moves.append((from_idx, pos_to_index(layer, row, col+dc), QUIET))
     for dc in (-1, 1):
         new_row = row + direction
-        if in_bounds(layer, new_row, col + dc):
-            moves.append((from_idx, pos_to_index(layer, new_row, col + dc), CAPTURE))
+        if in_bounds(layer, new_row, col+dc):
+            moves.append((from_idx, pos_to_index(layer, new_row, col+dc), CAPTURE))
     if layer == 2:
         target_layer = 1
         if in_bounds(target_layer, row, col):

@@ -1,131 +1,78 @@
-import copy
 import math
-import hashlib
 import numpy as np
-from game import NUM_BOARDS, BOARD_ROWS, BOARD_COLS, piece_to_int, board_state_hash_numpy
+from bitboard import NUM_BOARDS, BOARD_ROWS, BOARD_COLS, pos_to_index, index_to_pos
 
-piece_values = {
-    "King": 10000,
-    "Mage": 11,
-    "Paladin": 10,
-    "Cleric": 9,
-    "Dragon": 8,
-    "Griffin": 5,
-    "Oliphant": 5,
-    "Hero": 4.5,
-    "Thief": 4,
-    "Elemental": 4,
-    "Basilisk": 3,
-    "Unicorn": 2.5,
-    "Dwarf": 2,
-    "Sylph": 1,
-    "Warrior": 1
-}
+# Precompute a NumPy array for piece values (indices 1..15; index 0 for empty)
+piece_values_arr = np.array([0, 1, 5, 8, 5, 2.5, 4.5, 4, 9, 11, 10000, 10, 1, 3, 4, 2], dtype=np.float64)
 
-def in_bounds(pos):
-    layer, row, col = pos
-    return 0 <= layer < 3 and 0 <= row < 8 and 0 <= col < 12
+# Move flag constants (must match those in moves.py)
+QUIET     = 0
+CAPTURE   = 1
+AFAR      = 2
+AMBIGUOUS = 3
+THREED    = 4
 
-def is_empty(pos, board):
-    if not in_bounds(pos):
-        return False
-    return board.get(pos) is None
-
-def is_enemy(pos, board, color):
-    if not in_bounds(pos):
-        return False
-    piece = board.get(pos)
-    return piece is not None and piece.color != color
-
-# NEW: Convert dictionary board to a NumPy array.
-def dict_to_numpy(board):
-    np_board = np.zeros((NUM_BOARDS, BOARD_ROWS, BOARD_COLS), dtype=np.int16)
-    for pos, piece in board.items():
-        layer, row, col = pos
-        if piece:
-            np_board[layer, row, col] = piece_to_int.get(piece.symbol, 0)
-        else:
-            np_board[layer, row, col] = 0
-    return np_board
-
-# NEW: Use the NumPy hash for state hashing.
 def board_state_hash(state):
-    board, turn = state
-    np_board = dict_to_numpy(board)
-    return board_state_hash_numpy(np_board, turn)
+    board, turn_flag = state
+    # Use built-in hash (much faster than SHA256)
+    return hash((board.tobytes(), turn_flag))
+
+# Import the Numba‐compiled move generators from the game module.
+from game import move_generators
 
 def get_all_moves(state, color):
-    board, turn = state
+    board, _ = state
     moves = []
-    for pos, piece in board.items():
-        if piece is not None and piece.color == color:
-            raw_moves = piece.get_moves(pos, board)
-            for move in raw_moves:
-                if len(move) == 2:
-                    start, end = move
-                    flag = "quiet"
-                else:
-                    start, end, flag = move
-                if not in_bounds(end):
-                    continue
-                dest = board.get(end)
-                if flag == "quiet":
-                    if dest is None:
-                        moves.append(move)
-                elif flag == "capture":
-                    if dest is not None and dest.color != piece.color:
-                        moves.append(move)
-                elif flag == "afar":
-                    if dest is not None and dest.color != piece.color:
-                        moves.append(move)
-                elif flag in ["ambiguous", "3d"]:
-                    if dest is None or (dest is not None and dest.color != piece.color):
-                        moves.append(move)
-                else:
+    for idx in range(board.size):
+        piece = board[idx]
+        if piece != 0 and (color * piece > 0):
+            pos = index_to_pos(idx)
+            abs_code = abs(piece)
+            gen_func = move_generators.get(abs_code)
+            if gen_func is not None:
+                candidate_moves = gen_func(pos, board, color)
+                for move in candidate_moves:
+                    from_idx, to_idx, flag = move
+                    if flag == QUIET and board[to_idx] != 0:
+                        continue
+                    elif flag in (CAPTURE, AFAR):
+                        if board[to_idx] == 0:
+                            continue
+                        if color * board[to_idx] > 0:
+                            continue
                     moves.append(move)
-    moves.sort(key=lambda m: 0 if (len(m)==3 and m[2] in ["capture","afar"]) else 1)
+    # Order moves so that capture/afar moves come first (improves pruning)
+    moves.sort(key=lambda m: 0 if m[2] in (CAPTURE, AFAR) else 1)
     return moves
 
 def evaluate_state(state, my_color, history):
-    board, turn = state
-    score = 0
-    for pos, piece in board.items():
-        if piece is not None:
-            val = piece_values.get(piece.name, 0)
-            if piece.color == my_color:
-                score += val
-            else:
-                score -= val
-    # Use our fast hash.
+    board, _ = state
+    # Vectorized evaluation: add values for Gold pieces, subtract for Scarlet.
+    gold_mask = board > 0
+    scarlet_mask = board < 0
+    score = np.sum(piece_values_arr[board[gold_mask]]) - np.sum(piece_values_arr[-board[scarlet_mask]])
+    # Count repetitions (if any) for draw detection
     h = board_state_hash(state)
-    repetition_count = history.count(h)
-    penalty = repetition_count * 5000
-    return score - penalty
+    penalty = history.count(h) * 5000
+    # Multiply by my_color so that from the AI’s perspective a favorable state is positive.
+    return my_color * (score - penalty)
 
 def simulate_move(state, move):
-    board, turn = state
-    new_board = copy.deepcopy(board)  # Consider writing a custom board copy if needed.
-    if len(move) == 2:
-        start, end = move
-        flag = "quiet"
-    else:
-        start, end, flag = move
-    piece = new_board[start]
-    dest_piece = new_board[end]
-    if flag == "afar":
-        if dest_piece is not None and dest_piece.color != piece.color:
-            new_board[end] = None
-    else:
-        if dest_piece is not None and dest_piece.color != piece.color:
-            new_board[end] = None
-        new_board[end] = piece
-        new_board[start] = None
-    new_turn = "Scarlet" if turn == "Gold" else "Gold"
+    board, turn_flag = state
+    new_board = np.copy(board)
+    from_idx, to_idx, flag = move
+    piece = new_board[from_idx]
+    if flag in (CAPTURE, AFAR):
+        new_board[to_idx] = 0
+    new_board[to_idx] = piece
+    new_board[from_idx] = 0
+    new_turn = -turn_flag
     return (new_board, new_turn)
 
+# Global transposition table for caching evaluations.
 transposition_table = {}
 
-def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
+def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, current_depth=0):
     key = board_state_hash(state)
     if key in transposition_table:
         cached_depth, cached_val, cached_move = transposition_table[key]
@@ -143,7 +90,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
         max_eval = -math.inf
         for move in moves:
             new_state = simulate_move(state, move)
-            eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, False, my_color, history)
+            eval_val, _ = alphabeta(new_state, depth - 1, alpha, beta, False, my_color, history, current_depth + 1)
             if eval_val > max_eval:
                 max_eval = eval_val
                 best_move = move
@@ -156,7 +103,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
         min_eval = math.inf
         for move in moves:
             new_state = simulate_move(state, move)
-            eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, True, my_color, history)
+            eval_val, _ = alphabeta(new_state, depth - 1, alpha, beta, True, my_color, history, current_depth + 1)
             if eval_val < min_eval:
                 min_eval = eval_val
                 best_move = move
@@ -166,14 +113,28 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history):
         transposition_table[key] = (depth, min_eval, best_move)
         return min_eval, best_move
 
+def iterative_deepening(state, max_depth, my_color, history):
+    best_eval = None
+    best_move = None
+    # Optionally, you can clear the transposition table at each iteration:
+    # transposition_table.clear()
+    for depth in range(1, max_depth + 1):
+        eval_val, move = alphabeta(state, depth, -math.inf, math.inf, True, my_color, history)
+        best_eval = eval_val
+        best_move = move
+    return best_eval, best_move
+
 class CustomAI:
     def __init__(self, game, color):
         self.game = game
-        self.color = color
-        self.depth = 3  # Increase as performance permits.
+        # Convert color string to integer flag: "Gold" -> 1, "Scarlet" -> -1.
+        self.color_flag = 1 if color == "Gold" else -1
+        self.max_depth = 3  # You can increase this if you have more time
 
     def choose_move(self):
-        state = (copy.deepcopy(self.game.board), self.game.current_turn)
+        turn = self.game.current_turn  # "Gold" or "Scarlet"
+        turn_flag = 1 if turn == "Gold" else -1
+        state = (np.copy(self.game.board), turn_flag)
         history = self.game.state_history
-        eval_val, best_move = alphabeta(state, self.depth, -math.inf, math.inf, True, self.color, history)
+        _, best_move = iterative_deepening(state, self.max_depth, self.color_flag, history)
         return best_move
