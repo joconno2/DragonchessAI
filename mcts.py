@@ -67,7 +67,7 @@ def is_terminal(state):
     scarlet_king = np.any(board == -10)
     return not (gold_king and scarlet_king)
 
-def rollout(state, max_moves=50):
+def rollout(state, max_moves=250):
     board, turn_flag = state
     current_state = (np.copy(board), turn_flag)
     for _ in range(max_moves):
@@ -118,7 +118,7 @@ class CustomAI:
     """
     A Monte Carlo Tree Search (MCTS) AI for Dragonchess using the new state representation.
     """
-    def __init__(self, game, color, iterations=50):
+    def __init__(self, game, color, iterations=10):
         self.game = game
         self.color = color  # "Gold" or "Scarlet"
         self.iterations = iterations

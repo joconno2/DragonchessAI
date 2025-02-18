@@ -17,8 +17,8 @@ def generate_sylph_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
-    # For Gold (color==1), we assume movement is upward (row decreases); for Scarlet (color==-1), downward.
-    direction = -1 if color == 1 else 1
+    # Updated: use string check for color.
+    direction = -1 if color == "Gold" else 1
     if layer == 0:
         # Non-capturing: diagonal moves
         for dc in (-1, 1):
@@ -44,7 +44,7 @@ def generate_sylph_moves(pos, board, color):
             moves.append((from_idx, pos_to_index(new_layer, row, col), QUIET))
         # Also allow moves to designated home cells:
         target_layer = 0
-        if color == 1:
+        if color == "Gold":
             home_row = BOARD_ROWS - 1  # row 7
             for c in range(0, BOARD_COLS, 2):
                 if in_bounds(target_layer, home_row, c) and board[pos_to_index(target_layer, home_row, c)] == 0:
@@ -355,7 +355,8 @@ def generate_warrior_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 1:
         return moves
-    direction = -1 if color == 1 else 1
+    # Updated: use string check for color.
+    direction = -1 if color == "Gold" else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
         moves.append((from_idx, pos_to_index(layer, new_row, col), QUIET))
@@ -372,7 +373,8 @@ def generate_basilisk_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 2:
         return moves
-    direction = -1 if color == 1 else 1
+    # Updated: use string check for color.
+    direction = -1 if color == "Gold" else 1
     for dc in (0, -1, 1):
         new_row = row + direction
         new_col = col + dc
@@ -397,7 +399,7 @@ def generate_elemental_moves(pos, board, color):
                     break
                 to_idx = pos_to_index(layer, new_row, new_col)
                 if dist == 1:
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0):
+                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
@@ -405,7 +407,7 @@ def generate_elemental_moves(pos, board, color):
                     inter_idx = pos_to_index(layer, row + dr, col + dc)
                     if board[inter_idx] != 0:
                         break
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0):
+                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
@@ -429,7 +431,7 @@ def generate_elemental_moves(pos, board, color):
                 to_idx = pos_to_index(target_layer, row+dr, col+dc)
                 if board[to_idx] == 0:
                     moves.append((from_idx, to_idx, QUIET))
-                elif board[to_idx] != 0 and board[to_idx] * (1 if color == 1 else -1) < 0:
+                elif board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0:
                     moves.append((from_idx, to_idx, CAPTURE))
     return moves
 
@@ -440,7 +442,8 @@ def generate_dwarf_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer not in (1, 2):
         return moves
-    direction = -1 if color == 1 else 1
+    # Updated: use string check for color.
+    direction = -1 if color == "Gold" else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
         moves.append((from_idx, pos_to_index(layer, new_row, col), QUIET))
