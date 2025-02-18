@@ -3,7 +3,8 @@ from menu import run_menu, run_ai_vs_ai_menu, run_ai_vs_player_menu
 from game import Game, pos_to_index, index_to_pos
 from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS
 from ai import RandomAI
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 # UI layout constants
 CELL_SIZE = 40
@@ -149,37 +150,11 @@ def draw_game_over(screen, message, win_width, win_height):
     pygame.time.delay(3000)
 
 def compress_move_log(move_notations):
-    """
-    Compress the full move record into a single string.
-    Each move is concatenated using a pipe ('|') as the separator.
-    No turn numbers are added.
-    """
+    """Compress the full move record into a single string."""
     return "|".join(move_notations)
 
-# --- Multithreaded simulation helper for AI vs AI headless mode ---
-def simulate_ai_vs_ai_game(game_num, options):
-    """
-    Simulate one AI vs AI game (headless) and return:
-    (game_num, move_notations, winner)
-    """
-    game = Game()
-    if options.get("gold_ai"):
-        ai_gold = load_custom_ai(options["gold_ai"], game, "Gold")
-    else:
-        ai_gold = RandomAI(game, "Gold")
-    if options.get("scarlet_ai"):
-        ai_scarlet = load_custom_ai(options["scarlet_ai"], game, "Scarlet")
-    else:
-        ai_scarlet = RandomAI(game, "Scarlet")
-    while not game.game_over:
-        if game.current_turn == "Gold":
-            move = ai_gold.choose_move()
-        else:
-            move = ai_scarlet.choose_move()
-        if move:
-            game.make_move(move)
-        game.update()
-    return game_num, game.move_notations, game.winner
+# Import the simulation function from simulation.py
+from simulation import simulate_ai_vs_ai_game
 
 def main():
     pygame.init()
@@ -218,11 +193,10 @@ def main():
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=",", quoting=csv.QUOTE_NONE, escapechar="\\")
             writer.writeheader()
             if headless:
-                # Run games concurrently (up to 10 games at a time).
                 results = []
                 max_workers = min(num_games, 10)
                 finished_count = 0
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with ProcessPoolExecutor(max_workers=max_workers) as executor:
                     futures = [executor.submit(simulate_ai_vs_ai_game, game_num, options)
                                for game_num in range(1, num_games + 1)]
                     for future in as_completed(futures):
@@ -238,7 +212,6 @@ def main():
                     })
                     print(f"Game {game_num} finished. Winner: {winner}")
             else:
-                # Rendered sequential simulation.
                 for game_num in range(1, num_games + 1):
                     game = Game()
                     if options.get("gold_ai"):
@@ -272,7 +245,6 @@ def main():
                     })
                     print(f"Game {game_num} finished. Winner: {game.winner}")
     else:
-        # For 2 Player or AI vs Player modes.
         game = Game()
         ai = None
         two_player = (mode == "2 Player")
@@ -337,4 +309,6 @@ def main():
     sys.exit()
 
 if __name__ == "__main__":
+    # Protect the entry point for multiprocessing (required on Windows)
+    multiprocessing.freeze_support()
     main()
