@@ -1,8 +1,9 @@
-import sys, os, pygame, importlib.util
+import sys, os, pygame, importlib.util, csv
 from menu import run_menu, run_ai_vs_ai_menu, run_ai_vs_player_menu
 from game import Game, pos_to_index, index_to_pos
 from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS
 from ai import RandomAI
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # UI layout constants
 CELL_SIZE = 40
@@ -71,7 +72,7 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
     screen.fill(BG_COLOR)
     board_width = BOARD_COLS * CELL_SIZE
     board_height = BOARD_ROWS * CELL_SIZE
-    font = pygame.font.Font("pixel.ttf", 30)
+    font = pygame.font.Font("pixel.ttf", 20)
     frozen_overlay = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
     frozen_overlay.fill((0,150,255,100))
     
@@ -147,6 +148,39 @@ def draw_game_over(screen, message, win_width, win_height):
     pygame.display.flip()
     pygame.time.delay(3000)
 
+def compress_move_log(move_notations):
+    """
+    Compress the full move record into a single string.
+    Each move is concatenated using a pipe ('|') as the separator.
+    No turn numbers are added.
+    """
+    return "|".join(move_notations)
+
+# --- Multithreaded simulation helper for AI vs AI headless mode ---
+def simulate_ai_vs_ai_game(game_num, options):
+    """
+    Simulate one AI vs AI game (headless) and return:
+    (game_num, move_notations, winner)
+    """
+    game = Game()
+    if options.get("gold_ai"):
+        ai_gold = load_custom_ai(options["gold_ai"], game, "Gold")
+    else:
+        ai_gold = RandomAI(game, "Gold")
+    if options.get("scarlet_ai"):
+        ai_scarlet = load_custom_ai(options["scarlet_ai"], game, "Scarlet")
+    else:
+        ai_scarlet = RandomAI(game, "Scarlet")
+    while not game.game_over:
+        if game.current_turn == "Gold":
+            move = ai_gold.choose_move()
+        else:
+            move = ai_scarlet.choose_move()
+        if move:
+            game.make_move(move)
+        game.update()
+    return game_num, game.move_notations, game.winner
+
 def main():
     pygame.init()
     mode, custom_ai_menu = run_menu()
@@ -173,56 +207,75 @@ def main():
         screen = None
     else:
         screen = pygame.display.set_mode((win_width, win_height))
-        pygame.display.set_caption("Dragonchess (Bitboard Engine with Numba)")
+        pygame.display.set_caption("Dragonchess")
     assets = load_assets(CELL_SIZE)
     clock = pygame.time.Clock()
 
     if mode == "AI vs AI":
-        import csv
         log_filename = options["log_filename"]
         with open(log_filename, "w", newline="") as csvfile:
-            fieldnames = ["game_number", "move_number", "move", "winner"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            fieldnames = ["game_number", "full_record", "winner"]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=",", quoting=csv.QUOTE_NONE, escapechar="\\")
             writer.writeheader()
-            for game_num in range(1, num_games + 1):
-                game = Game()
-                if options.get("gold_ai"):
-                    ai_gold = load_custom_ai(options["gold_ai"], game, "Gold")
-                else:
-                    ai_gold = RandomAI(game, "Gold")
-                if options.get("scarlet_ai"):
-                    ai_scarlet = load_custom_ai(options["scarlet_ai"], game, "Scarlet")
-                else:
-                    ai_scarlet = RandomAI(game, "Scarlet")
-                while not game.game_over:
-                    for event in pygame.event.get():
-                        if event.type == pygame.QUIT:
-                            pygame.quit()
-                            sys.exit()
-                    if game.current_turn == "Gold":
-                        move = ai_gold.choose_move()
-                    else:
-                        move = ai_scarlet.choose_move()
-                    if move:
-                        game.make_move(move)
-                    game.update()
-                    if screen:
-                        draw_board(screen, game, assets)
-                        pygame.display.flip()
-                for i, move_str in enumerate(game.move_notations):
+            if headless:
+                # Run games concurrently (up to 10 games at a time).
+                results = []
+                max_workers = min(num_games, 10)
+                finished_count = 0
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(simulate_ai_vs_ai_game, game_num, options)
+                               for game_num in range(1, num_games + 1)]
+                    for future in as_completed(futures):
+                        results.append(future.result())
+                        finished_count += 1
+                        print(f"Progress: {finished_count}/{num_games} games finished.")
+                for game_num, move_notations, winner in sorted(results, key=lambda x: x[0]):
+                    full_record = compress_move_log(move_notations)
                     writer.writerow({
                         "game_number": game_num,
-                        "move_number": i + 1,
-                        "move": move_str,
-                        "winner": game.winner if i == len(game.move_notations) - 1 else ""
+                        "full_record": full_record,
+                        "winner": winner
                     })
-                print(f"Game {game_num} finished. Winner: {game.winner}")
+                    print(f"Game {game_num} finished. Winner: {winner}")
+            else:
+                # Rendered sequential simulation.
+                for game_num in range(1, num_games + 1):
+                    game = Game()
+                    if options.get("gold_ai"):
+                        ai_gold = load_custom_ai(options["gold_ai"], game, "Gold")
+                    else:
+                        ai_gold = RandomAI(game, "Gold")
+                    if options.get("scarlet_ai"):
+                        ai_scarlet = load_custom_ai(options["scarlet_ai"], game, "Scarlet")
+                    else:
+                        ai_scarlet = RandomAI(game, "Scarlet")
+                    while not game.game_over:
+                        for event in pygame.event.get():
+                            if event.type == pygame.QUIT:
+                                pygame.quit()
+                                sys.exit()
+                        if game.current_turn == "Gold":
+                            move = ai_gold.choose_move()
+                        else:
+                            move = ai_scarlet.choose_move()
+                        if move:
+                            game.make_move(move)
+                        game.update()
+                        if screen:
+                            draw_board(screen, game, assets)
+                            pygame.display.flip()
+                    full_record = compress_move_log(game.move_notations)
+                    writer.writerow({
+                        "game_number": game_num,
+                        "full_record": full_record,
+                        "winner": game.winner
+                    })
+                    print(f"Game {game_num} finished. Winner: {game.winner}")
     else:
+        # For 2 Player or AI vs Player modes.
         game = Game()
         ai = None
-        # In 2 Player mode the human controls both sides.
         two_player = (mode == "2 Player")
-        # For AI vs Player mode, assign the AI to its chosen side.
         if mode == "AI vs Player":
             if options.get("ai_file"):
                 ai = load_custom_ai(options["ai_file"], game, ai_side)
@@ -231,9 +284,6 @@ def main():
         selected_index = None
         running = True
         while running and not game.game_over:
-            # Process events for human input when it's a human turn.
-            # In 2 Player mode, always process input.
-            # In AI vs Player mode, process input when it's NOT the AI's turn.
             if two_player or (mode == "AI vs Player" and game.current_turn != ai_side):
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
@@ -267,7 +317,6 @@ def main():
                                     else:
                                         selected_index = None
             else:
-                # In AI vs Player mode, if it's the AI's turn, process quit events.
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
@@ -282,7 +331,6 @@ def main():
             if screen:
                 draw_board(screen, game, assets, selected_index, legal_destinations)
                 pygame.display.flip()
-        # Now, show the game over (winner) screen for both 2 Player and AI vs Player modes.
         if screen and (two_player or mode == "AI vs Player"):
             draw_game_over(screen, game.winner, win_width, win_height)
     pygame.quit()
