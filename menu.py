@@ -95,7 +95,7 @@ def run_ai_vs_ai_menu():
         relative_rect=pygame.Rect((300, 110), (200, 40)),
         manager=manager
     )
-    input_log_filename.set_text("ai_vs_ai_log.csv")
+    input_log_filename.set_text("logs/ai_vs_ai_log.csv")
 
     label_headless = pygame_gui.elements.UILabel(
         relative_rect=pygame.Rect((50, 170), (200, 40)),
@@ -127,7 +127,7 @@ def run_ai_vs_ai_menu():
 
     options = {
         "num_games": 10,
-        "log_filename": "ai_vs_ai_log.csv",
+        "log_filename": "logs/ai_vs_ai_log.csv",
         "headless": True,
         "scarlet_ai": None,
         "gold_ai": None
@@ -170,7 +170,7 @@ def run_ai_vs_ai_menu():
                             options["num_games"] = int(input_num_games.get_text().strip() or "10")
                         except ValueError:
                             options["num_games"] = 10
-                        options["log_filename"] = input_log_filename.get_text() or "ai_vs_ai_log.csv"
+                        options["log_filename"] = input_log_filename.get_text() or "logs/ai_vs_ai_log.csv"
                         running = False
                 if event.user_type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
                     if hasattr(event.ui_element, "custom_title"):

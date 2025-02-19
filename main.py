@@ -73,7 +73,7 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
     screen.fill(BG_COLOR)
     board_width = BOARD_COLS * CELL_SIZE
     board_height = BOARD_ROWS * CELL_SIZE
-    font = pygame.font.Font("pixel.ttf", 20)
+    font = pygame.font.Font("assets/pixel.ttf", 20)
     frozen_overlay = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
     frozen_overlay.fill((0,150,255,100))
     
@@ -107,7 +107,7 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
         board_rect = pygame.Rect(board_x_start, board_y_start, board_width, board_height)
         pygame.draw.rect(screen, LINE_COLOR, board_rect, 3)
         titles = ["Sky", "Ground", "Underworld"]
-        title_font = pygame.font.Font("pixel.ttf", 36)
+        title_font = pygame.font.Font("assets/pixel.ttf", 36)
         title_text = title_font.render(titles[layer], True, (255,255,255))
         title_rect = title_text.get_rect(center=(board_x_start + board_width//2, BOARD_TOP_MARGIN//2))
         screen.blit(title_text, title_rect)
@@ -116,7 +116,7 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
     pane_rect = pygame.Rect(total_width - SIDE_PANEL_WIDTH, 0, SIDE_PANEL_WIDTH, total_height)
     pygame.draw.rect(screen, (30,30,30), pane_rect)
     pygame.draw.rect(screen, LINE_COLOR, pane_rect, 3)
-    log_font = pygame.font.Font("pixel.ttf", 24)
+    log_font = pygame.font.Font("assets/pixel.ttf", 24)
     y_offset = 10
     for move_str in game.move_notations[-int((total_height - y_offset)/20):]:
         text = log_font.render(move_str, True, (200,200,200))
@@ -142,7 +142,7 @@ def draw_game_over(screen, message, win_width, win_height):
     overlay = pygame.Surface((win_width, win_height), pygame.SRCALPHA)
     overlay.fill((0,0,0,150))
     screen.blit(overlay, (0,0))
-    game_over_font = pygame.font.Font("pixel.ttf", 48)
+    game_over_font = pygame.font.Font("assets/pixel.ttf", 48)
     text = game_over_font.render(f"Game Over! Winner: {message}", True, (255,255,255))
     text_rect = text.get_rect(center=(win_width//2, win_height//2))
     screen.blit(text, text_rect)
