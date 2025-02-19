@@ -1,5 +1,5 @@
 import sys, os, pygame, importlib.util, csv
-from menu import run_menu, run_ai_vs_ai_menu, run_ai_vs_player_menu
+from menu import run_menu, run_ai_vs_ai_menu, run_ai_vs_player_menu, run_tournament_menu
 from game import Game, pos_to_index, index_to_pos
 from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS
 from ai import RandomAI
@@ -85,8 +85,8 @@ def draw_board(screen, game, assets, selected_index=None, legal_destinations=Non
                 rect = pygame.Rect(board_x_start + col * CELL_SIZE,
                                    board_y_start + row * CELL_SIZE,
                                    CELL_SIZE, CELL_SIZE)
-                color = LIGHT_SQUARE if (row+col) % 2 == 0 else DARK_SQUARE
-                pygame.draw.rect(screen, color, rect)
+                square_color = LIGHT_SQUARE if (row+col) % 2 == 0 else DARK_SQUARE
+                pygame.draw.rect(screen, square_color, rect)
                 pygame.draw.rect(screen, LINE_COLOR, rect, 1)
                 idx = pos_to_index(layer, row, col)
                 if selected_index is not None and idx == selected_index:
@@ -153,7 +153,7 @@ def compress_move_log(move_notations):
     """Compress the full move record into a single string."""
     return "|".join(move_notations)
 
-# Import the simulation function from simulation.py
+# Import simulation function for AI vs AI games.
 from simulation import simulate_ai_vs_ai_game
 
 def main():
@@ -169,6 +169,12 @@ def main():
         headless = False
         num_games = 1
         ai_side = options["ai_side"]  # "Gold" or "Scarlet"
+    elif mode == "Tournament":
+        options = run_tournament_menu()
+        from tournament import run_tournament
+        run_tournament(options)
+        pygame.quit()
+        sys.exit()
     else:
         headless = False
         num_games = 1
@@ -245,6 +251,7 @@ def main():
                     })
                     print(f"Game {game_num} finished. Winner: {game.winner}")
     else:
+        # Two-player or AI vs Player mode.
         game = Game()
         ai = None
         two_player = (mode == "2 Player")
@@ -309,6 +316,5 @@ def main():
     sys.exit()
 
 if __name__ == "__main__":
-    # Protect the entry point for multiprocessing (required on Windows)
     multiprocessing.freeze_support()
     main()

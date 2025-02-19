@@ -1,10 +1,11 @@
 import math
 import random
+import time
 import numpy as np
 from bitboard import NUM_BOARDS, BOARD_ROWS, BOARD_COLS, pos_to_index, index_to_pos
 
 # Our state is represented as (board, turn_flag)
-# where board is a 1D NumPy array of length NUM_BOARDS * BOARD_ROWS * BOARD_COLS,
+# where board is a 1D NumPy array (flattened board)
 # and turn_flag is 1 for Gold and -1 for Scarlet.
 
 # Move flag constants (must match those used by your move generators)
@@ -16,7 +17,7 @@ THREED    = 4
 
 def board_state_hash(state):
     board, turn_flag = state
-    # Fast hash based on board bytes and turn flag
+    # Fast hash based on board bytes and turn flag.
     return hash((board.tobytes(), turn_flag))
 
 # Import the Numba‐compiled move generators from the game module.
@@ -25,7 +26,7 @@ from game import move_generators
 def get_all_moves(state, color):
     board, turn_flag = state
     moves = []
-    # Board is a flattened NumPy array
+    # board is a flattened NumPy array.
     for idx in range(board.size):
         piece = board[idx]
         if piece != 0 and (color * piece > 0):
@@ -44,7 +45,7 @@ def get_all_moves(state, color):
                         if board[to_idx] == 0 or (color * board[to_idx] > 0):
                             continue
                     moves.append(move)
-    # Order moves so that capture/afar moves come first (improves pruning)
+    # Order moves so that capture/afar moves come first (improves pruning).
     moves.sort(key=lambda m: 0 if m[2] in (CAPTURE, AFAR) else 1)
     return moves
 
@@ -101,8 +102,9 @@ class MCTSNode:
         self.wins = 0
 
     def uct_select_child(self):
-        # UCT formula: average win rate plus exploration term.
-        return max(self.children, key=lambda c: (c.wins / c.visits) + math.sqrt(2 * math.log(self.visits) / c.visits))
+        # UCT: average win rate plus exploration term.
+        return max(self.children,
+                   key=lambda c: (c.wins / c.visits) + math.sqrt(2 * math.log(self.visits) / c.visits))
 
     def add_child(self, move, state):
         child = MCTSNode(state, parent=self, move=move)
@@ -116,37 +118,46 @@ class MCTSNode:
 
 class CustomAI:
     """
-    A Monte Carlo Tree Search (MCTS) AI for Dragonchess using the new state representation.
+    A Monte Carlo Tree Search (MCTS) AI for Dragonchess.
+    This version uses a time limit (default 5 seconds) instead of a fixed number of iterations.
     """
-    def __init__(self, game, color, iterations=10):
+    def __init__(self, game, color, time_limit=5.0):
         self.game = game
         self.color = color  # "Gold" or "Scarlet"
-        self.iterations = iterations
-
+        self.time_limit = time_limit
+        # If a bot file is not provided, the calling code should default to RandomAI.
+        # (This module always runs its own MCTS.)
+        
     def choose_move(self):
         turn = self.game.current_turn  # "Gold" or "Scarlet"
         turn_flag = 1 if turn == "Gold" else -1
         state = (np.copy(self.game.board), turn_flag)
         root = MCTSNode(state)
-        for _ in range(self.iterations):
+        start_time = time.time()
+        iterations = 0
+        # Run iterations until the time limit is exceeded.
+        while time.time() - start_time < self.time_limit:
+            iterations += 1
             node = root
             state_copy = (np.copy(state[0]), state[1])
-            # SELECTION: traverse the tree to a leaf node.
+            # SELECTION: Traverse down the tree.
             while not node.untried_moves and node.children:
                 node = node.uct_select_child()
                 state_copy = simulate_move(state_copy, node.move)
-            # EXPANSION: if untried moves remain, expand one.
+            # EXPANSION: If there are untried moves, choose one and expand.
             if node.untried_moves:
                 move = random.choice(node.untried_moves)
                 state_copy = simulate_move(state_copy, move)
                 node = node.add_child(move, state_copy)
-            # SIMULATION: run a rollout from this new node.
+            # SIMULATION: Rollout until terminal or max moves.
             final_state = rollout(state_copy)
             outcome = result(final_state, self.color)
-            # BACKPROPAGATION: update nodes with the outcome.
+            # BACKPROPAGATION: Propagate the result up the tree.
             while node is not None:
                 node.update(outcome)
                 node = node.parent
+        # Uncomment the following line to print the number of iterations performed:
+        # print(f"MCTS completed {iterations} iterations in {time.time() - start_time:.2f} seconds.")
         if not root.children:
             return None
         best_child = max(root.children, key=lambda child: child.visits)
