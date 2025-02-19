@@ -35,7 +35,7 @@ def run_menu():
     clock = pygame.time.Clock()
     running = True
 
-    title_font = pygame.font.Font("pixel.ttf", 48)
+    title_font = pygame.font.Font("assets/pixel.ttf", 48)
     title_text = title_font.render("Dragonchess", True, (255, 255, 255))
     title_rect = title_text.get_rect(center=(300, 50))
 
@@ -291,7 +291,7 @@ def run_tournament_menu():
         relative_rect=pygame.Rect((300, 110), (200, 40)),
         manager=manager
     )
-    input_csv.set_text("tournament_results.csv")
+    input_csv.set_text("logs/tournament_results.csv")
 
     # Create 8 file selection buttons and labels for 8 bots.
     bot_buttons = []
@@ -322,7 +322,7 @@ def run_tournament_menu():
     options = {
         "tournament_rounds": 5,
         "bot_file_paths": default_paths.copy(),
-        "output_csv": "tournament_results.csv",
+        "output_csv": "logs/tournament_results.csv",
         "headless": True
     }
 
@@ -353,7 +353,7 @@ def run_tournament_menu():
                             options["tournament_rounds"] = int(rounds_str) if rounds_str != "" else 5
                         except ValueError:
                             options["tournament_rounds"] = 5
-                        options["output_csv"] = input_csv.get_text() or "tournament_results.csv"
+                        options["output_csv"] = input_csv.get_text() or "logs/tournament_results.csv"
                         # Update the bot file paths from the labels.
                         for i, lbl in enumerate(bot_labels):
                             options["bot_file_paths"][i] = lbl.text  # using the .text property
