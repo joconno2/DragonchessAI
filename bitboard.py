@@ -98,6 +98,6 @@ def create_initial_board():
     board[pos_to_index(2, 7, 6)]  = GOLD_ELEMENTAL
     board[pos_to_index(2, 7, 10)] = GOLD_BASILISK
     for col in range(1, BOARD_COLS, 2):
-        board[pos_to_index(2, 5, col)] = GOLD_DWARF
+        board[pos_to_index(2, 6, col)] = GOLD_DWARF
 
     return board

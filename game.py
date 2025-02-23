@@ -45,6 +45,7 @@ class Game:
         for idx in range(TOTAL_SQUARES):
             piece = self.board[idx]
             if piece != 0:
+                # Only consider moves for the player whose turn it is.
                 if (self.current_turn == "Gold" and piece > 0) or (self.current_turn == "Scarlet" and piece < 0):
                     pos = index_to_pos(idx)
                     abs_code = abs(piece)
@@ -53,13 +54,18 @@ class Game:
                         candidate_moves = gen_func(pos, self.board, self.current_turn)
                         for move in candidate_moves:
                             from_idx, to_idx, flag = move
-                            if flag == QUIET and self.board[to_idx] != 0:
-                                continue
+                            if flag == QUIET:
+                                if self.board[to_idx] != 0:
+                                    continue
+                            elif flag == AMBIGUOUS:
+                                # For ambiguous moves, allow if destination is empty or holds an enemy.
+                                # Skip only if destination holds a friendly piece.
+                                if self.board[to_idx] != 0 and ((self.current_turn == "Gold" and self.board[to_idx] > 0) or (self.current_turn == "Scarlet" and self.board[to_idx] < 0)):
+                                    continue
                             elif flag in (CAPTURE, AFAR):
                                 if self.board[to_idx] == 0:
                                     continue
-                                if (self.current_turn == "Gold" and self.board[to_idx] > 0) or \
-                                   (self.current_turn == "Scarlet" and self.board[to_idx] < 0):
+                                if (self.current_turn == "Gold" and self.board[to_idx] > 0) or (self.current_turn == "Scarlet" and self.board[to_idx] < 0):
                                     continue
                             moves_list.append(move)
         return moves_list
@@ -77,12 +83,16 @@ class Game:
     def make_move(self, move):
         from_idx, to_idx, flag = move
         moving_piece = self.board[from_idx]  # retrieve before updating board
+        target_piece = self.board[to_idx]
+        # Check: if the destination is occupied by a friendly unit, raise an error.
+        if target_piece != 0 and ((moving_piece > 0 and target_piece > 0) or (moving_piece < 0 and target_piece < 0)):
+            raise ValueError("Illegal move: Attempt to capture a friendly unit.")
         move_alg = self._move_to_algebraic(move, moving_piece)
         self.move_notations.append(move_alg)
         self.game_log.append(move)
         capture_occurred = False
         if flag in (CAPTURE, AFAR):
-            if self.board[to_idx] != 0:
+            if target_piece != 0:
                 capture_occurred = True
             self.board[to_idx] = 0
         self.board[to_idx] = moving_piece

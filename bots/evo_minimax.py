@@ -6,7 +6,7 @@ from bitboard import NUM_BOARDS, BOARD_ROWS, BOARD_COLS, pos_to_index, index_to_
 
 # Precompute piece values: index 0 = empty; indices 1..15 for piece codes.
 piece_values_arr = np.array(
-    [0, 1, 5, 8, 5, 2.5, 4.5, 4, 9, 11, 10000, 10, 1, 3, 4, 2],
+    [0, 1.42, 2.88, 37.76, 8.89, 1.44, 5.24, 3.01, 13.13, 18.51, 10000, 14.12, 1.09, 3.97, 6.71, 2.53],
     dtype=np.float64
 )
 

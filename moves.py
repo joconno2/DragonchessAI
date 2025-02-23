@@ -17,10 +17,9 @@ def generate_sylph_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
-    # Updated: use string check for color.
     direction = -1 if color == "Gold" else 1
     if layer == 0:
-        # Non-capturing: diagonal moves
+        # Non-capturing: diagonal moves (destination must be empty)
         for dc in (-1, 1):
             new_row = row + direction
             new_col = col + dc
@@ -32,13 +31,20 @@ def generate_sylph_moves(pos, board, color):
         new_row = row + direction
         new_col = col
         if in_bounds(layer, new_row, new_col):
-            moves.append((from_idx, pos_to_index(layer, new_row, new_col), CAPTURE))
+            to_idx = pos_to_index(layer, new_row, new_col)
+            if board[to_idx] != 0:
+                # Only capture if enemy piece is present.
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, CAPTURE))
         # Capturing: move down to middle board
         new_layer = 1
         if in_bounds(new_layer, row, col):
-            moves.append((from_idx, pos_to_index(new_layer, row, col), CAPTURE))
+            to_idx = pos_to_index(new_layer, row, col)
+            if board[to_idx] != 0:
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, CAPTURE))
     elif layer == 1:
-        # On middle board, allow quiet move back to top board
+        # On middle board, allow quiet move back to top board if empty.
         new_layer = 0
         if in_bounds(new_layer, row, col) and board[pos_to_index(new_layer, row, col)] == 0:
             moves.append((from_idx, pos_to_index(new_layer, row, col), QUIET))
@@ -68,28 +74,37 @@ def generate_griffin_moves(pos, board, color):
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                to_idx = pos_to_index(layer, new_row, new_col)
+                # For ambiguous moves, if destination is not empty, only add if enemy.
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
         new_layer = 1
         for dr in (-1, 1):
             for dc in (-1, 1):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(new_layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(new_layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(new_layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
     elif layer == 1:
         for dr in (-1, 1):
             for dc in (-1, 1):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
         new_layer = 0
         for dr in (-1, 1):
             for dc in (-1, 1):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(new_layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(new_layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(new_layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -99,7 +114,7 @@ def generate_dragon_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 0:
         return moves
-    # King–like moves (excluding the null move)
+    # King-like moves (excluding null move)
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
             if dr == 0 and dc == 0:
@@ -107,8 +122,11 @@ def generate_dragon_moves(pos, board, color):
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
-    # Bishop–like sliding moves (diagonals)
+                to_idx = pos_to_index(layer, new_row, new_col)
+                # Only add move if destination is empty or has enemy.
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
+    # Bishop-like sliding moves (diagonals)
     for dr, dc in ((-1,-1), (-1,1), (1,-1), (1,1)):
         r = row
         c = col
@@ -117,18 +135,27 @@ def generate_dragon_moves(pos, board, color):
             c += dc
             if not in_bounds(layer, r, c):
                 break
-            moves.append((from_idx, pos_to_index(layer, r, c), AMBIGUOUS))
-            if board[pos_to_index(layer, r, c)] != 0:
+            to_idx = pos_to_index(layer, r, c)
+            if board[to_idx] == 0:
+                moves.append((from_idx, to_idx, AMBIGUOUS))
+            else:
+                # Add only if enemy, then break.
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
                 break
     # "Capture from afar" moves (to middle board)
     target_layer = 1
     if in_bounds(target_layer, row, col):
-        moves.append((from_idx, pos_to_index(target_layer, row, col), AFAR))
+        to_idx = pos_to_index(target_layer, row, col)
+        if board[to_idx] != 0 and ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+            moves.append((from_idx, to_idx, AFAR))
     for dr, dc in ((0,1), (0,-1), (1,0), (-1,0)):
         new_row = row + dr
         new_col = col + dc
         if in_bounds(target_layer, new_row, new_col):
-            moves.append((from_idx, pos_to_index(target_layer, new_row, new_col), AFAR))
+            to_idx = pos_to_index(target_layer, new_row, new_col)
+            if board[to_idx] != 0 and ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AFAR))
     return moves
 
 @njit
@@ -146,8 +173,12 @@ def generate_oliphant_moves(pos, board, color):
             c += dc
             if not in_bounds(layer, r, c):
                 break
-            moves.append((from_idx, pos_to_index(layer, r, c), AMBIGUOUS))
-            if board[pos_to_index(layer, r, c)] != 0:
+            to_idx = pos_to_index(layer, r, c)
+            if board[to_idx] == 0:
+                moves.append((from_idx, to_idx, AMBIGUOUS))
+            else:
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
                 break
     return moves
 
@@ -163,7 +194,9 @@ def generate_unicorn_moves(pos, board, color):
         new_row = row + dr
         new_col = col + dc
         if in_bounds(layer, new_row, new_col):
-            moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+            to_idx = pos_to_index(layer, new_row, new_col)
+            if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -179,7 +212,9 @@ def generate_hero_moves(pos, board, color):
                     new_row = row + dr
                     new_col = col + dc
                     if in_bounds(layer, new_row, new_col):
-                        moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                        to_idx = pos_to_index(layer, new_row, new_col)
+                        if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                            moves.append((from_idx, to_idx, AMBIGUOUS))
         # Move to top or bottom board via diagonal.
         for target_layer in (0, 2):
             for dr in (-1, 1):
@@ -187,7 +222,9 @@ def generate_hero_moves(pos, board, color):
                     new_row = row + dr
                     new_col = col + dc
                     if in_bounds(target_layer, new_row, new_col):
-                        moves.append((from_idx, pos_to_index(target_layer, new_row, new_col), AMBIGUOUS))
+                        to_idx = pos_to_index(target_layer, new_row, new_col)
+                        if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                            moves.append((from_idx, to_idx, AMBIGUOUS))
     else:
         target_layer = 1
         for dr in (-1, 1):
@@ -195,7 +232,9 @@ def generate_hero_moves(pos, board, color):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(target_layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(target_layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(target_layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -213,8 +252,10 @@ def generate_thief_moves(pos, board, color):
             c += dc
             if not in_bounds(layer, r, c):
                 break
-            moves.append((from_idx, pos_to_index(layer, r, c), AMBIGUOUS))
-            if board[pos_to_index(layer, r, c)] != 0:
+            to_idx = pos_to_index(layer, r, c)
+            if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AMBIGUOUS))
+            if board[to_idx] != 0:
                 break
     return moves
 
@@ -223,7 +264,6 @@ def generate_cleric_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
-    # Exclude the null move (dr=0, dc=0)
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
             if dr == 0 and dc == 0:
@@ -231,19 +271,27 @@ def generate_cleric_moves(pos, board, color):
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                to_idx = pos_to_index(layer, new_row, new_col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     if layer == 0:
         new_layer = 1
         if in_bounds(new_layer, row, col):
-            moves.append((from_idx, pos_to_index(new_layer, row, col), AMBIGUOUS))
+            to_idx = pos_to_index(new_layer, row, col)
+            if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AMBIGUOUS))
     elif layer == 1:
         for target_layer in (0, 2):
             if in_bounds(target_layer, row, col):
-                moves.append((from_idx, pos_to_index(target_layer, row, col), AMBIGUOUS))
+                to_idx = pos_to_index(target_layer, row, col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     elif layer == 2:
         new_layer = 1
         if in_bounds(new_layer, row, col):
-            moves.append((from_idx, pos_to_index(new_layer, row, col), AMBIGUOUS))
+            to_idx = pos_to_index(new_layer, row, col)
+            if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -260,23 +308,33 @@ def generate_mage_moves(pos, board, color):
                 c += dc
                 if not in_bounds(layer, r, c):
                     break
-                moves.append((from_idx, pos_to_index(layer, r, c), AMBIGUOUS))
-                if board[pos_to_index(layer, r, c)] != 0:
+                to_idx = pos_to_index(layer, r, c)
+                if board[to_idx] == 0:
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
+                else:
+                    if ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
                     break
         for d_layer in (-1, 1):
             new_layer = layer + d_layer
             if in_bounds(new_layer, row, col):
-                moves.append((from_idx, pos_to_index(new_layer, row, col), AMBIGUOUS))
+                to_idx = pos_to_index(new_layer, row, col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     else:
         for dr, dc in ((0,1), (0,-1), (1,0), (-1,0)):
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                to_idx = pos_to_index(layer, new_row, new_col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
         for d in (-2, -1, 1, 2):
             new_row = row + d
             if in_bounds(layer, new_row, col):
-                moves.append((from_idx, pos_to_index(layer, new_row, col), AMBIGUOUS))
+                to_idx = pos_to_index(layer, new_row, col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -292,15 +350,21 @@ def generate_king_moves(pos, board, color):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
         for d_layer in (-1, 1):
             new_layer = layer + d_layer
             if in_bounds(new_layer, row, col):
-                moves.append((from_idx, pos_to_index(new_layer, row, col), AMBIGUOUS))
+                to_idx = pos_to_index(new_layer, row, col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     else:
         new_layer = 1
         if in_bounds(new_layer, row, col):
-            moves.append((from_idx, pos_to_index(new_layer, row, col), AMBIGUOUS))
+            to_idx = pos_to_index(new_layer, row, col)
+            if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, AMBIGUOUS))
     return moves
 
 @njit
@@ -316,13 +380,17 @@ def generate_paladin_moves(pos, board, color):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
         offsets = ((2,1), (2,-1), (-2,1), (-2,-1), (1,2), (1,-2), (-1,2), (-1,-2))
         for dr, dc in offsets:
             new_row = row + dr
             new_col = col + dc
             if in_bounds(layer, new_row, new_col):
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                to_idx = pos_to_index(layer, new_row, new_col)
+                if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     else:
         for dr in (-1, 0, 1):
             for dc in (-1, 0, 1):
@@ -331,7 +399,9 @@ def generate_paladin_moves(pos, board, color):
                 new_row = row + dr
                 new_col = col + dc
                 if in_bounds(layer, new_row, new_col):
-                    moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+                    to_idx = pos_to_index(layer, new_row, new_col)
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                        moves.append((from_idx, to_idx, AMBIGUOUS))
     # 3D knight moves (unblockable)
     for d_layer in (-2, -1, 1, 2):
         for d_row in (-2, -1, 0, 1, 2):
@@ -345,7 +415,9 @@ def generate_paladin_moves(pos, board, color):
                     new_row = row + d_row
                     new_col = col + d_col
                     if in_bounds(new_layer, new_row, new_col):
-                        moves.append((from_idx, pos_to_index(new_layer, new_row, new_col), THREED))
+                        to_idx = pos_to_index(new_layer, new_row, new_col)
+                        if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                            moves.append((from_idx, to_idx, THREED))
     return moves
 
 @njit
@@ -355,7 +427,6 @@ def generate_warrior_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 1:
         return moves
-    # Updated: use string check for color.
     direction = -1 if color == "Gold" else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
@@ -363,7 +434,10 @@ def generate_warrior_moves(pos, board, color):
     for dc in (-1, 1):
         new_col = col + dc
         if in_bounds(layer, new_row, new_col):
-            moves.append((from_idx, pos_to_index(layer, new_row, new_col), CAPTURE))
+            to_idx = pos_to_index(layer, new_row, new_col)
+            if board[to_idx] != 0:
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, CAPTURE))
     return moves
 
 @njit
@@ -373,16 +447,20 @@ def generate_basilisk_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer != 2:
         return moves
-    # Updated: use string check for color.
     direction = -1 if color == "Gold" else 1
     for dc in (0, -1, 1):
         new_row = row + direction
         new_col = col + dc
         if in_bounds(layer, new_row, new_col):
-            moves.append((from_idx, pos_to_index(layer, new_row, new_col), AMBIGUOUS))
+            to_idx = pos_to_index(layer, new_row, new_col)
+            if board[to_idx] != 0:
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, AMBIGUOUS))
     new_row = row - direction
-    if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
-        moves.append((from_idx, pos_to_index(layer, new_row, col), QUIET))
+    if in_bounds(layer, new_row, col):
+        to_idx = pos_to_index(layer, new_row, col)
+        if board[to_idx] == 0:
+            moves.append((from_idx, to_idx, QUIET))
     return moves
 
 @njit
@@ -399,7 +477,7 @@ def generate_elemental_moves(pos, board, color):
                     break
                 to_idx = pos_to_index(layer, new_row, new_col)
                 if dist == 1:
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0):
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
@@ -407,15 +485,17 @@ def generate_elemental_moves(pos, board, color):
                     inter_idx = pos_to_index(layer, row + dr, col + dc)
                     if board[inter_idx] != 0:
                         break
-                    if board[to_idx] == 0 or (board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0):
+                    if board[to_idx] == 0 or ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
                         moves.append((from_idx, to_idx, AMBIGUOUS))
                     else:
                         break
         for dr, dc in ((-1,-1), (-1,1), (1,-1), (1,1)):
             new_row = row + dr
             new_col = col + dc
-            if in_bounds(layer, new_row, new_col) and board[pos_to_index(layer, new_row, new_col)] == 0:
-                moves.append((from_idx, pos_to_index(layer, new_row, new_col), QUIET))
+            if in_bounds(layer, new_row, new_col):
+                to_idx = pos_to_index(layer, new_row, new_col)
+                if board[to_idx] == 0:
+                    moves.append((from_idx, to_idx, QUIET))
         for dr, dc in ((1,0), (-1,0), (0,1), (0,-1)):
             inter_row = row + dr
             inter_col = col + dc
@@ -431,7 +511,7 @@ def generate_elemental_moves(pos, board, color):
                 to_idx = pos_to_index(target_layer, row+dr, col+dc)
                 if board[to_idx] == 0:
                     moves.append((from_idx, to_idx, QUIET))
-                elif board[to_idx] != 0 and board[to_idx] * (1 if color == "Gold" else -1) < 0:
+                elif (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
                     moves.append((from_idx, to_idx, CAPTURE))
     return moves
 
@@ -442,7 +522,6 @@ def generate_dwarf_moves(pos, board, color):
     from_idx = pos_to_index(layer, row, col)
     if layer not in (1, 2):
         return moves
-    # Updated: use string check for color.
     direction = -1 if color == "Gold" else 1
     new_row = row + direction
     if in_bounds(layer, new_row, col) and board[pos_to_index(layer, new_row, col)] == 0:
@@ -453,11 +532,16 @@ def generate_dwarf_moves(pos, board, color):
     for dc in (-1, 1):
         new_row = row + direction
         if in_bounds(layer, new_row, col+dc):
-            moves.append((from_idx, pos_to_index(layer, new_row, col+dc), CAPTURE))
+            to_idx = pos_to_index(layer, new_row, col+dc)
+            if board[to_idx] != 0:
+                if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                    moves.append((from_idx, to_idx, CAPTURE))
     if layer == 2:
         target_layer = 1
         if in_bounds(target_layer, row, col):
-            moves.append((from_idx, pos_to_index(target_layer, row, col), CAPTURE))
+            to_idx = pos_to_index(target_layer, row, col)
+            if board[to_idx] != 0 and ((color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0)):
+                moves.append((from_idx, to_idx, CAPTURE))
     if layer == 1:
         target_layer = 2
         if in_bounds(target_layer, row, col) and board[pos_to_index(target_layer, row, col)] == 0:
