@@ -30,7 +30,9 @@ class TimeOutException(Exception):
     pass
 
 def get_all_moves(state, color):
-    board, _ = state
+    board, turn_flag = state
+    # Convert the numeric turn flag into the proper string.
+    color_str = "Gold" if color == 1 else "Scarlet"
     moves = []
     for idx in range(board.size):
         piece = board[idx]
@@ -39,7 +41,8 @@ def get_all_moves(state, color):
             abs_code = abs(piece)
             gen_func = move_generators.get(abs_code)
             if gen_func is not None:
-                candidate_moves = gen_func(pos, board, color)
+                # Pass the converted color string to the move generator.
+                candidate_moves = gen_func(pos, board, color_str)
                 for move in candidate_moves:
                     from_idx, to_idx, flag = move
                     if flag == QUIET and board[to_idx] != 0:
@@ -51,8 +54,6 @@ def get_all_moves(state, color):
                             continue
                     moves.append(move)
     # --- Improved Move Ordering ---
-    # Sort moves so that capture moves (CAPTURE or AFAR) are considered first.
-    # For capture moves, we sort in descending order by the value of the piece being captured.
     def move_key(m):
         flag = m[2]
         if flag in (CAPTURE, AFAR):
@@ -72,7 +73,6 @@ def evaluate_state(state, my_color, history):
     score = np.sum(piece_values_arr[board[gold_mask]]) - np.sum(piece_values_arr[-board[scarlet_mask]])
     h = board_state_hash(state)
     penalty = history.count(h) * 5000
-    # Multiply by my_color so that from our AI’s perspective, favorable states are positive.
     return my_color * (score - penalty)
 
 def simulate_move(state, move):
@@ -140,16 +140,13 @@ def iterative_deepening(state, max_depth, my_color, history, time_limit=5.0):
     start_time = time.time()
     for depth in range(1, max_depth + 1):
         try:
-            eval_val, move = alphabeta(
-                state, depth, -math.inf, math.inf, True, my_color, history,
-                current_depth=0, start_time=start_time, time_limit=time_limit
-            )
+            eval_val, move = alphabeta(state, depth, -math.inf, math.inf, True, my_color, history, current_depth=0, start_time=start_time, time_limit=time_limit)
             best_eval = eval_val
             best_move = move
         except TimeOutException:
-            # Time limit reached; break and return the best move from the last completed iteration.
             break
     return best_eval, best_move
+
 
 class CustomAI:
     def __init__(self, game, color):

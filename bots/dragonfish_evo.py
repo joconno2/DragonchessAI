@@ -9,8 +9,9 @@ A position is represented as a dict with:
   • "board": a flat NumPy array (length = TOTAL_SQUARES) as created by create_initial_board().
   • "turn": "Gold" or "Scarlet".
   • "no_capture_count": an integer.
+  • (For evolved evaluations, the position dictionary will also include key "pv" which holds the material scaling factors.)
 
-This module defines evaluation components, a 25‑parameter decoding function (14 parameters for piece value scaling and 11 for positional weights), a main evaluation function (with debug printing), search functions (alphabeta and iterative deepening), and a CustomAI class.
+This module defines evaluation components, a 25‑parameter decoding function (first 14 parameters for piece value scaling and the remaining 11 for positional weights), a main evaluation function (with debug printing), search functions (alphabeta and iterative deepening), and a CustomAI class.
 It also provides a helper function load_weights(filename) so that evolved parameters can be read from a file.
 
 USAGE EXAMPLE:
@@ -21,7 +22,7 @@ USAGE EXAMPLE:
     move = ai_bot.choose_move()
     print("Chosen move:", move)
 
-Additionally, if run as a standalone script, this file will run a CMA-ES evolution routine to optimize the 25-dimensional weight vector.
+Additionally, if run as a standalone script, this file will run a CMA‐ES evolution routine to optimize the 25‐dimensional weight vector.
 """
 
 import math
@@ -36,11 +37,11 @@ from numba import njit
 DEBUG = False
 
 # --- Move Flag Constants ---
-QUIET = 0
-CAPTURE = 1
-AFAR = 2
+QUIET     = 0
+CAPTURE   = 1
+AFAR      = 2
 AMBIGUOUS = 3
-THREED = 4
+THREED    = 4
 
 from bitboard import pos_to_index, index_to_pos, BOARD_ROWS, BOARD_COLS, NUM_BOARDS, TOTAL_SQUARES
 
@@ -143,7 +144,7 @@ def board_activity_penalty(pos):
 
 # --- Dragon Center Bonus ---
 def dragon_center_bonus(pos):
-    bonus = 0.0
+    bonus_val = 0.0
     board = pos["board"]
     center_row = (BOARD_ROWS - 1) / 2.0
     center_col = (BOARD_COLS - 1) / 2.0
@@ -152,8 +153,8 @@ def dragon_center_bonus(pos):
         piece = board[idx]
         if abs(piece) == 3 and layer == 0:
             dist = ((row - center_row)**2 + (col - center_col)**2)**0.5
-            bonus += (max_dist - dist)
-    return bonus
+            bonus_val += (max_dist - dist)
+    return bonus_val
 
 # --- Mapping of Dragonchess Pieces ---
 piece_letter_map = {
@@ -167,27 +168,23 @@ def map_piece(piece):
         return None
     return piece_letter_map.get(abs(piece), None)
 
-# --- Material Evaluation ---
-def piece_value_bonus(pos, sq, mg):
+# --- Material Evaluation using Evolved Scaling (pv) ---
+def piece_value_bonus(pos, sq, pv):
     p = board_at(pos, sq.layer, sq.y, sq.x)
-    letter = map_piece(p)
-    if letter is None or letter == 'K':
+    # Do not add material value for kings.
+    if abs(p) == 10:
         return 0
-    value_map = {
-        'P': stockfish_original[1],
-        'N': stockfish_original[2],
-        'B': stockfish_original[5],
-        'R': stockfish_original[4],
-        'Q': stockfish_original[3]
-    }
-    return value_map.get(letter, 0)
+    gene = abs(p)
+    if gene not in pv:
+        return 0
+    return pv[gene]
 
-def piece_value_mg(pos, sq=None):
+def piece_value_mg(pos, pv, sq=None):
     if sq is None:
-        return board_sum_all(pos, piece_value_mg)
-    return piece_value_bonus(pos, sq, mg=True)
+        return board_sum_all(pos, lambda pos, sq: piece_value_bonus(pos, sq, pv))
+    return piece_value_bonus(pos, sq, pv)
 
-# --- Piece-Square Table Evaluation ---
+# --- Piece-Square Table Evaluation (unchanged) ---
 def psqt_bonus(pos, sq, mg):
     if mg:
         bonus = [
@@ -278,6 +275,18 @@ def threats_mg(pos):
 def king_mg(pos, sq=None):
     return king_safety_on_board(pos["board"], BOARD_ROWS, min(BOARD_COLS, 8))
 
+def mobility_eg(pos, sq=None):
+    return mobility_mg(pos, sq)
+
+def passed_eg(pos, sq=None):
+    return passed_mg(pos, sq)
+
+def threats_eg(pos):
+    return threats_mg(pos)
+
+def king_eg(pos, sq=None):
+    return king_mg(pos, sq)
+
 def space(pos, sq=None):
     board = pos["board"]
     empty = np.count_nonzero(board == 0)
@@ -294,8 +303,8 @@ def imbalance_total(pos, sq=None):
                 gold_bishops += 1
             elif p < 0 and map_piece(p) == 'B':
                 scarlet_bishops += 1
-    bonus = 50
-    return bonus * ((gold_bishops >= 2) - (scarlet_bishops >= 2))
+    bonus_val = 50
+    return bonus_val * ((gold_bishops >= 2) - (scarlet_bishops >= 2))
 
 @njit
 def mobility_on_board(board, total_squares, board_rows, board_cols):
@@ -303,7 +312,7 @@ def mobility_on_board(board, total_squares, board_rows, board_cols):
     mobility_scarlet = 0
     for row in range(board_rows):
         for col in range(min(board_cols, 8)):
-            idx = (1 * (board_rows * board_cols)) + row * board_cols + col
+            idx = row * board_cols + col
             p = board[idx]
             if p == 0:
                 continue
@@ -315,7 +324,7 @@ def mobility_on_board(board, total_squares, board_rows, board_cols):
                     new_row = row + dr
                     new_col = col + dc
                     if new_row >= 0 and new_row < board_rows and new_col >= 0 and new_col < min(board_cols, 8):
-                        new_idx = (1 * (board_rows * board_cols)) + new_row * board_cols + new_col
+                        new_idx = new_row * board_cols + new_col
                         if board[new_idx] == 0:
                             count += 1
             if p > 0:
@@ -330,7 +339,7 @@ def passed_on_board(board, board_rows, board_cols):
     passed_scarlet = 0
     for row in range(board_rows):
         for col in range(min(board_cols, 8)):
-            idx = (1 * (board_rows * board_cols)) + row * board_cols + col
+            idx = row * board_cols + col
             p = board[idx]
             if p == 0:
                 continue
@@ -346,7 +355,7 @@ def threats_on_board(board, board_rows, board_cols):
     threat_scarlet = 0
     for row in range(board_rows):
         for col in range(min(board_cols, 8)):
-            idx = (1 * (board_rows * board_cols)) + row * board_cols + col
+            idx = row * board_cols + col
             p = board[idx]
             if p == 0:
                 continue
@@ -357,7 +366,7 @@ def threats_on_board(board, board_rows, board_cols):
                     new_row = row + dr
                     new_col = col + dc
                     if new_row >= 0 and new_row < board_rows and new_col >= 0 and new_col < min(board_cols, 8):
-                        new_idx = (1 * (board_rows * board_cols)) + new_row * board_cols + new_col
+                        new_idx = new_row * board_cols + new_col
                         target = board[new_idx]
                         if target != 0 and (p * target < 0):
                             if p > 0:
@@ -372,7 +381,7 @@ def king_safety_on_board(board, board_rows, board_cols):
     king_safety_scarlet = 0
     for row in range(board_rows):
         for col in range(min(board_cols, 8)):
-            idx = (1 * (board_rows * board_cols)) + row * board_cols + col
+            idx = row * board_cols + col
             p = board[idx]
             if p == 10 or p == -10:
                 count = 0
@@ -383,7 +392,7 @@ def king_safety_on_board(board, board_rows, board_cols):
                         new_row = row + dr
                         new_col = col + dc
                         if new_row >= 0 and new_row < board_rows and new_col >= 0 and new_col < min(board_cols, 8):
-                            new_idx = (1 * (board_rows * board_cols)) + new_row * board_cols + new_col
+                            new_idx = new_row * board_cols + new_col
                             if p > 0 and board[new_idx] > 0:
                                 count += 1
                             elif p < 0 and board[new_idx] < 0:
@@ -434,15 +443,15 @@ def imbalance_total(pos, sq=None):
                 gold_bishops += 1
             elif p < 0 and map_piece(p) == 'B':
                 scarlet_bishops += 1
-    bonus = 50
-    return bonus * ((gold_bishops >= 2) - (scarlet_bishops >= 2))
+    bonus_val = 50
+    return bonus_val * ((gold_bishops >= 2) - (scarlet_bishops >= 2))
 
+# --- Decoding the 25-Dimensional Parameter Vector ---
 def decode_vector(param_vector):
     if len(param_vector) != 25:
         raise ValueError("Parameter vector must have 25 elements.")
     pv = np.zeros(16, dtype=np.float64)
-    # For pieces 1-9 and 11-15, use stockfish_original as baseline.
-    # Default scaling: using -0.6931 gives sigmoid(-0.6931)=0.3333 so that pv[gene] equals stockfish_original[gene].
+    # For pieces 1-9 and 11-15, scale stockfish_original using the first 14 parameters.
     for i, gene in enumerate([1,2,3,4,5,6,7,8,9,11,12,13,14,15]):
         orig = stockfish_original[gene]
         lower = 0.5 * orig
@@ -450,14 +459,40 @@ def decode_vector(param_vector):
         s = 1 / (1 + math.exp(-param_vector[i]))
         pv[gene] = lower + s * (upper - lower)
     pv[0] = 0.0
-    pv[10] = stockfish_original[10]
+    pv[10] = stockfish_original[10]  # King remains fixed.
     weights_mg = param_vector[14:25]
     return pv, weights_mg
 
-def middle_game_evaluation(pos, nowinnable=False, weights_mg=None):
+# --- New Helper: Build candidate moves from a position dictionary ---
+def get_all_moves_from_pos(pos, color):
+    # Convert a position dictionary to a state tuple and use get_all_moves.
+    state = (pos["board"], 1 if pos["turn"]=="Gold" else -1)
+    return get_all_moves(state, color)
+
+# --- New Override Heuristic: King Attack Bonus ---
+def king_attack_bonus(pos, our_color):
+    # our_color is 1 if we are Gold, -1 if we are Scarlet.
+    enemy_king = -10 * our_color
+    board = pos["board"]
+    enemy_king_indices = np.where(board == enemy_king)[0]
+    if enemy_king_indices.size == 0:
+        return 0
+    enemy_king_index = enemy_king_indices[0]
+    bonus = 0
+    candidate_moves = get_all_moves_from_pos(pos, our_color)
+    for move in candidate_moves:
+        from_idx, to_idx, flag = move
+        if to_idx == enemy_king_index:
+            bonus += 10000  # Huge bonus for a move that can capture the enemy king.
+    return bonus
+
+# --- Revised Material and Positional Evaluation ---
+def middle_game_evaluation(pos, weights_mg=None, pv=None):
     if weights_mg is None or len(weights_mg) != 11:
         raise ValueError("weights_mg must be a sequence of 11 values.")
-    material_diff = weights_mg[0] * (piece_value_mg(pos) - piece_value_mg(colorflip(pos)))
+    if pv is None:
+        raise ValueError("Material scaling vector (pv) must be provided.")
+    material_diff = weights_mg[0] * (piece_value_mg(pos, pv) - piece_value_mg(colorflip(pos), pv))
     psqt_diff = weights_mg[1] * (psqt_mg(pos) - psqt_mg(colorflip(pos)))
     imbalance = weights_mg[2] * imbalance_total(pos)
     pawn_diff = weights_mg[3] * (pawns_mg(pos) - pawns_mg(colorflip(pos)))
@@ -486,8 +521,8 @@ def middle_game_evaluation(pos, nowinnable=False, weights_mg=None):
         print("Total mg: ", v)
     return v
 
-def main_evaluation(pos, weights_mg):
-    mg = middle_game_evaluation(pos, nowinnable=False, weights_mg=weights_mg)
+def main_evaluation(pos, weights_mg, pv):
+    mg = middle_game_evaluation(pos, weights_mg, pv)
     p_val = phase(pos)
     r50 = rule50(pos)
     eg_scaled = int(mg * scale_factor(pos, mg) / 64)
@@ -495,23 +530,36 @@ def main_evaluation(pos, weights_mg):
     v = int(v / 16) * 16
     v += tempo(pos)
     v = int(v * (100 - r50) / 100)
+    # Add override: if any move can capture enemy king, boost evaluation.
+    our_color = 1 if pos["turn"] == "Gold" else -1
+    v += king_attack_bonus(pos, our_color)
     if DEBUG:
         print(f"DEBUG EVAL: mg={mg}, p_val={p_val}, r50={r50}, eg_scaled={eg_scaled}, final={v}")
     return v
 
 def evaluate_game(game, param_vector):
     pos = position_from_game(game)
-    _, weights_mg = decode_vector(param_vector)
-    return main_evaluation(pos, weights_mg)
+    pv, weights_mg = decode_vector(param_vector)
+    pos["pv"] = pv  # store scaling factors in pos (if needed)
+    return main_evaluation(pos, weights_mg, pv)
 
 def load_weights(filename):
     try:
-        vec = np.loadtxt(filename, delimiter=None)
-        if vec.size != 25:
-            raise ValueError("Expected 25 values, got {}".format(vec.size))
-        return vec.tolist()
+        # Read file line by line and return the first numeric vector of 25 floats.
+        with open(filename, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line[0].isdigit() or line[0] in "-.":
+                    parts = line.split()
+                    vector = [float(x) for x in parts]
+                    if len(vector) != 25:
+                        raise ValueError(f"Expected 25 values, got {len(vector)}")
+                    return vector
+        raise ValueError("No numeric weight vector found in file")
     except Exception as e:
-        raise IOError("Error reading weights file {}: {}".format(filename, e))
+        raise IOError(f"Error reading weights file {filename}: {e}")
 
 transposition_table = {}
 
@@ -564,7 +612,7 @@ def simulate_move(state, move):
     new_turn = -turn_flag
     return (new_board, new_turn)
 
-def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, current_depth=0, start_time=None, time_limit=None, weights_mg=None):
+def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, current_depth=0, start_time=None, time_limit=None, weights_mg=None, pv=None):
     if start_time is not None and time_limit is not None:
         if time.time() - start_time > time_limit:
             raise TimeOutException
@@ -572,9 +620,10 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, cu
     moves = get_all_moves(state, state[1])
     if depth == 0 or not moves:
         pos = {"board": state[0],
-               "turn": "Gold" if state[1]==1 else "Scarlet",
-               "no_capture_count": len(history)}
-        val = main_evaluation(pos, weights_mg)
+               "turn": "Gold" if state[1] == 1 else "Scarlet",
+               "no_capture_count": len(history),
+               "pv": pv}
+        val = main_evaluation(pos, weights_mg, pv)
         transposition_table[key] = (depth, val, None)
         return val, None
     best_move = None
@@ -583,7 +632,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, cu
         for move in moves:
             new_state = simulate_move(state, move)
             eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, False, my_color, history,
-                                      current_depth+1, start_time, time_limit, weights_mg)
+                                      current_depth+1, start_time, time_limit, weights_mg, pv)
             if eval_val > max_eval:
                 max_eval = eval_val
                 best_move = move
@@ -597,7 +646,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, cu
         for move in moves:
             new_state = simulate_move(state, move)
             eval_val, _ = alphabeta(new_state, depth-1, alpha, beta, True, my_color, history,
-                                      current_depth+1, start_time, time_limit, weights_mg)
+                                      current_depth+1, start_time, time_limit, weights_mg, pv)
             if eval_val < min_eval:
                 min_eval = eval_val
                 best_move = move
@@ -607,7 +656,7 @@ def alphabeta(state, depth, alpha, beta, maximizingPlayer, my_color, history, cu
         transposition_table[key] = (depth, min_eval, best_move)
         return min_eval, best_move
 
-def iterative_deepening(state, max_depth, my_color, history, time_limit=5.0, weights_mg=None):
+def iterative_deepening(state, max_depth, my_color, history, time_limit=5.0, weights_mg=None, pv=None):
     global transposition_table
     transposition_table = {}
     best_eval = None
@@ -616,7 +665,7 @@ def iterative_deepening(state, max_depth, my_color, history, time_limit=5.0, wei
     for depth in range(1, max_depth+1):
         try:
             eval_val, move = alphabeta(state, depth, -math.inf, math.inf, True, my_color, history,
-                                        current_depth=0, start_time=start_time, time_limit=time_limit, weights_mg=weights_mg)
+                                        current_depth=0, start_time=start_time, time_limit=time_limit, weights_mg=weights_mg, pv=pv)
             best_eval = eval_val
             best_move = move
         except TimeOutException:
@@ -630,7 +679,7 @@ class CustomAI:
     It loads a 25-dimensional weight vector from a file (if provided) and uses
     iterative deepening minimax search to select moves.
     """
-    def __init__(self, game, color, weights_file=None):
+    def __init__(self, game, color, weights_file="best_weights.txt"):
         self.game = game
         self.color = color  # "Gold" or "Scarlet"
         self.color_flag = 1 if color == "Gold" else -1
@@ -640,9 +689,11 @@ class CustomAI:
             self.weights = load_weights(weights_file)
         else:
             self.weights = default_params
-        _, self.weights_mg = decode_vector(self.weights)
+        self.pv, self.weights_mg = decode_vector(self.weights)
         if DEBUG:
             print(f"CustomAI initialized for {self.color}")
+            print("Loaded piece scaling factors (pv):", self.pv)
+            print("Loaded middle-game weights:", self.weights_mg)
     def choose_move(self):
         if self.game.current_turn != self.color:
             if DEBUG:
@@ -651,7 +702,7 @@ class CustomAI:
         state = (self.game.board.copy(), 1 if self.color=="Gold" else -1)
         history = self.game.state_history
         best_eval, best_move = iterative_deepening(state, self.max_depth, self.color_flag, history,
-                                                     time_limit=5.0, weights_mg=self.weights_mg)
+                                                     time_limit=5.0, weights_mg=self.weights_mg, pv=self.pv)
         if best_eval is None:
             fallback = get_all_moves(state, self.color_flag)
             if fallback:
@@ -665,9 +716,10 @@ class CustomAI:
         for move in candidate_moves:
             new_state = simulate_move(state, move)
             pos = {"board": new_state[0],
-                   "turn": "Gold" if new_state[1]==1 else "Scarlet",
-                   "no_capture_count": len(history)}
-            eval_val = main_evaluation(pos, self.weights_mg)
+                   "turn": "Gold" if new_state[1] == 1 else "Scarlet",
+                   "no_capture_count": len(history),
+                   "pv": self.pv}
+            eval_val = main_evaluation(pos, self.weights_mg, self.pv)
             if eval_val == best_eval:
                 best_moves.append(move)
         if DEBUG:
@@ -687,8 +739,10 @@ class CustomAI:
 # --- Evolution Routine (using CMA-ES and multiprocessing) ---
 if __name__ == "__main__":
     import sys
+    import multiprocessing
+    multiprocessing.freeze_support()
     # If run with argument "evolve", run the evolution routine;
-    # otherwise, you can run a simple evaluation test.
+    # otherwise, run a simple evaluation test.
     if len(sys.argv) > 1 and sys.argv[1] == "evolve":
         from concurrent.futures import ProcessPoolExecutor
         import cma
@@ -698,7 +752,6 @@ if __name__ == "__main__":
         EVAL_GAMES = 3
         BONUS_FACTOR = 300.0
 
-        # Import Game and RandomAI from their modules
         from game import Game
         from ai import RandomAI
 
@@ -709,12 +762,12 @@ if __name__ == "__main__":
                 self.color_flag = 1 if color == "Gold" else -1
                 self.max_depth = 3
                 self.param_vector = param_vector
-                self.piece_values, self.weights_mg = decode_vector(param_vector)
+                self.pv, self.weights_mg = decode_vector(param_vector)
             def choose_move(self):
                 state = (np.copy(self.game.board), 1 if self.game.current_turn=="Gold" else -1)
                 history = self.game.state_history
                 best_eval, best_move = iterative_deepening(state, self.max_depth, self.color_flag, history,
-                                                             time_limit=5.0, weights_mg=self.weights_mg)
+                                                             time_limit=5.0, weights_mg=self.weights_mg, pv=self.pv)
                 if best_eval is None:
                     fallback = get_all_moves(state, self.color_flag)
                     if fallback:
@@ -729,8 +782,9 @@ if __name__ == "__main__":
                     new_state = simulate_move(state, move)
                     pos = {"board": new_state[0],
                            "turn": "Gold" if new_state[1]==1 else "Scarlet",
-                           "no_capture_count": len(history)}
-                    eval_val = main_evaluation(pos, self.weights_mg)
+                           "no_capture_count": len(history),
+                           "pv": self.pv}
+                    eval_val = main_evaluation(pos, self.weights_mg, self.pv)
                     if eval_val == best_eval:
                         best_moves.append(move)
                 print(f"Candidate moves with score {best_eval}: {best_moves}")
@@ -774,7 +828,8 @@ if __name__ == "__main__":
 
         def hash_state(state):
             board, turn_flag = state
-            turn = "Gold" if turn_flag==1 else "Scarlet"
+            turn = "Gold" if turn_flag == 1 else "Scarlet"
+            from game import board_state_hash
             return board_state_hash(board, turn)
 
         log_file = open("cma_es_log.txt", "w")
@@ -817,18 +872,15 @@ if __name__ == "__main__":
         print("Decoded middle-game weights:")
         print(best_weights_mg)
         with open("best_weights.txt", "w") as f:
-            f.write("Best parameter vector:\n")
-            f.write(" ".join(map(str, best_params)) + "\n")
-            f.write("Decoded piece values:\n")
-            f.write(" ".join(map(str, best_piece_values)) + "\n")
-            f.write("Decoded middle-game weights:\n")
-            f.write(" ".join(map(str, best_weights_mg)) + "\n")
+            f.write("Best parameter vector:\n" + " ".join(map(str, best_params)) + "\n")
+            f.write("Decoded piece values:\n" + " ".join(map(str, best_piece_values)) + "\n")
+            f.write("Decoded middle-game weights:\n" + " ".join(map(str, best_weights_mg)) + "\n")
     else:
-        # If no evolve argument is passed, run a simple evaluation test.
+        # Simple evaluation test.
         from bitboard import create_initial_board
         from game import Game
         board = create_initial_board()
         pos = {"board": board, "turn": "Gold", "no_capture_count": 0}
         params = [0.0] * 25
-        score = main_evaluation(pos, weights_mg=params[14:25])
+        score = evaluate_game(Game(), params)
         print("Evaluation value:", score)
