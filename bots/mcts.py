@@ -121,7 +121,7 @@ class CustomAI:
     A Monte Carlo Tree Search (MCTS) AI for Dragonchess.
     This version uses a time limit (default 5 seconds) instead of a fixed number of iterations.
     """
-    def __init__(self, game, color, time_limit=5.0):
+    def __init__(self, game, color, time_limit=10.0):
         self.game = game
         self.color = color  # "Gold" or "Scarlet"
         self.time_limit = time_limit
