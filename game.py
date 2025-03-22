@@ -84,9 +84,17 @@ class Game:
         if flag in (CAPTURE, AFAR):
             if self.board[to_idx] != 0:
                 capture_occurred = True
+            # Remove enemy piece
             self.board[to_idx] = 0
-        self.board[to_idx] = moving_piece
-        self.board[from_idx] = 0
+
+        # If this is an AFAR move with a Dragon, do not move the Dragon.
+        if flag == AFAR and abs(moving_piece) == 3:
+            # Dragon stays in place; no change to self.board[from_idx]
+            pass
+        else:
+            self.board[to_idx] = moving_piece
+            self.board[from_idx] = 0
+
         if capture_occurred:
             self.no_capture_count = 0
         else:
