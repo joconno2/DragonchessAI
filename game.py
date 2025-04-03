@@ -45,6 +45,9 @@ class Game:
         for idx in range(TOTAL_SQUARES):
             piece = self.board[idx]
             if piece != 0:
+                # Skip move generation for a piece that is frozen.
+                if self.frozen[idx]:
+                    continue
                 if (self.current_turn == "Gold" and piece > 0) or (self.current_turn == "Scarlet" and piece < 0):
                     pos = index_to_pos(idx)
                     abs_code = abs(piece)
@@ -59,10 +62,11 @@ class Game:
                                 if self.board[to_idx] == 0:
                                     continue
                                 if (self.current_turn == "Gold" and self.board[to_idx] > 0) or \
-                                   (self.current_turn == "Scarlet" and self.board[to_idx] < 0):
+                                (self.current_turn == "Scarlet" and self.board[to_idx] < 0):
                                     continue
                             moves_list.append(move)
         return moves_list
+
 
     def get_legal_moves_for(self, from_index):
         all_moves = self.get_all_moves()

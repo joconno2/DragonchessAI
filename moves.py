@@ -445,22 +445,45 @@ def generate_basilisk_moves(pos, board, color):
     moves = []
     layer, row, col = pos
     from_idx = pos_to_index(layer, row, col)
+    # Basilisk must be on the bottom board (layer 2)
     if layer != 2:
         return moves
+
+    # Determine forward direction: for Gold, forward is decreasing row; for Scarlet, increasing row.
     direction = -1 if color == "Gold" else 1
-    for dc in (0, -1, 1):
+
+    # Forward vertical move (directly forward)
+    new_row = row + direction
+    new_col = col
+    if in_bounds(layer, new_row, new_col):
+        to_idx = pos_to_index(layer, new_row, new_col)
+        if board[to_idx] == 0:
+            moves.append((from_idx, to_idx, QUIET))
+        else:
+            # If an enemy is present, add capture.
+            if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
+                moves.append((from_idx, to_idx, CAPTURE))
+    
+    # Diagonal forward moves
+    for dc in (-1, 1):
         new_row = row + direction
         new_col = col + dc
         if in_bounds(layer, new_row, new_col):
             to_idx = pos_to_index(layer, new_row, new_col)
-            if board[to_idx] != 0:
+            if board[to_idx] == 0:
+                moves.append((from_idx, to_idx, QUIET))
+            else:
                 if (color == "Gold" and board[to_idx] < 0) or (color == "Scarlet" and board[to_idx] > 0):
-                    moves.append((from_idx, to_idx, AMBIGUOUS))
+                    moves.append((from_idx, to_idx, CAPTURE))
+    
+    # Backward move: one cell directly backward (non-capturing only)
     new_row = row - direction
-    if in_bounds(layer, new_row, col):
-        to_idx = pos_to_index(layer, new_row, col)
+    new_col = col
+    if in_bounds(layer, new_row, new_col):
+        to_idx = pos_to_index(layer, new_row, new_col)
         if board[to_idx] == 0:
             moves.append((from_idx, to_idx, QUIET))
+    
     return moves
 
 @njit
