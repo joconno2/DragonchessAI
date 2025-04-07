@@ -161,5 +161,5 @@ class CustomAI:
         state = (np.copy(self.game.board), turn_flag)
         history = self.game.state_history
         # Use iterative deepening with a 5-second time limit.
-        _, best_move = iterative_deepening(state, self.max_depth, self.color_flag, history, time_limit=3.0)
+        _, best_move = iterative_deepening(state, self.max_depth, self.color_flag, history, time_limit=1.0)
         return best_move

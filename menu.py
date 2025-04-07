@@ -5,28 +5,46 @@ import os
 
 def run_menu():
     pygame.init()
-    screen = pygame.display.set_mode((600, 400))
+    # 9:16 resolution for menus (360x640)
+    screen = pygame.display.set_mode((360, 640))
     pygame.display.set_caption("Dragonchess Menu")
-    manager = pygame_gui.UIManager((600, 400))
+    manager = pygame_gui.UIManager((360, 640))
+
+    # Title configuration.
+    title_font = pygame.font.Font("assets/pixel.ttf", 36)
+    title_text = title_font.render("Dragonchess", True, (255, 255, 255))
+    title_rect = title_text.get_rect(center=(180, 80))
+
+    # Button configuration.
+    button_width = 280
+    button_height = 40
+    button_x = 40
+    button_y_start = 140
+    button_gap = 60
 
     button_2_player = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 100), (200, 50)),
+        relative_rect=pygame.Rect((button_x, button_y_start), (button_width, button_height)),
         text='2 Player',
         manager=manager
     )
     button_ai_vs_player = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 170), (200, 50)),
+        relative_rect=pygame.Rect((button_x, button_y_start+button_gap), (button_width, button_height)),
         text='AI vs Player',
         manager=manager
     )
     button_ai_vs_ai = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 240), (200, 50)),
+        relative_rect=pygame.Rect((button_x, button_y_start+2*button_gap), (button_width, button_height)),
         text='AI vs AI',
         manager=manager
     )
     button_tournament = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 310), (200, 50)),
+        relative_rect=pygame.Rect((button_x, button_y_start+3*button_gap), (button_width, button_height)),
         text='Tournament',
+        manager=manager
+    )
+    button_campaign = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((button_x, button_y_start+4*button_gap), (button_width, button_height)),
+        text='Campaign',
         manager=manager
     )
 
@@ -34,10 +52,6 @@ def run_menu():
     custom_ai = {"scarlet": None, "gold": None}
     clock = pygame.time.Clock()
     running = True
-
-    title_font = pygame.font.Font("assets/pixel.ttf", 48)
-    title_text = title_font.render("Dragonchess", True, (255, 255, 255))
-    title_rect = title_text.get_rect(center=(300, 50))
 
     while running:
         time_delta = clock.tick(60) / 1000.0
@@ -60,6 +74,9 @@ def run_menu():
                     elif event.ui_element == button_tournament:
                         mode = "Tournament"
                         running = False
+                    elif event.ui_element == button_campaign:
+                        mode = "Campaign"
+                        running = False
             manager.process_events(event)
         manager.update(time_delta)
         screen.fill((30, 30, 30))
@@ -71,56 +88,56 @@ def run_menu():
 
 def run_ai_vs_ai_menu():
     pygame.init()
-    screen = pygame.display.set_mode((600, 500))
+    screen = pygame.display.set_mode((360, 640))
     pygame.display.set_caption("AI vs AI Options")
-    manager = pygame_gui.UIManager((600, 500))
+    manager = pygame_gui.UIManager((360, 640))
 
     label_num_games = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 50), (200, 40)),
+        relative_rect=pygame.Rect((20, 50), (120, 30)),
         text="Number of Games:",
         manager=manager
     )
     input_num_games = pygame_gui.elements.UITextEntryLine(
-        relative_rect=pygame.Rect((300, 50), (200, 40)),
+        relative_rect=pygame.Rect((150, 50), (180, 30)),
         manager=manager
     )
     input_num_games.set_text("10")
 
     label_log_filename = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 110), (200, 40)),
+        relative_rect=pygame.Rect((20, 100), (120, 30)),
         text="Log Filename:",
         manager=manager
     )
     input_log_filename = pygame_gui.elements.UITextEntryLine(
-        relative_rect=pygame.Rect((300, 110), (200, 40)),
+        relative_rect=pygame.Rect((150, 100), (180, 30)),
         manager=manager
     )
     input_log_filename.set_text("logs/ai_vs_ai_log.csv")
 
     label_headless = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 170), (200, 40)),
+        relative_rect=pygame.Rect((20, 150), (120, 30)),
         text="Headless Mode:",
         manager=manager
     )
     button_headless_toggle = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((300, 170), (200, 40)),
+        relative_rect=pygame.Rect((150, 150), (180, 30)),
         text="Yes",
         manager=manager
     )
 
     button_browse_scarlet = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((50, 230), (200, 40)),
+        relative_rect=pygame.Rect((20, 200), (140, 30)),
         text="Browse Scarlet AI",
         manager=manager
     )
     button_browse_gold = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((350, 230), (200, 40)),
+        relative_rect=pygame.Rect((180, 200), (150, 30)),
         text="Browse Gold AI",
         manager=manager
     )
 
     button_start = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 350), (200, 50)),
+        relative_rect=pygame.Rect((80, 550), (200, 40)),
         text="Start",
         manager=manager
     )
@@ -143,7 +160,6 @@ def run_ai_vs_ai_menu():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-
             if event.type == pygame.USEREVENT:
                 if event.user_type == pygame_gui.UI_BUTTON_PRESSED:
                     if event.ui_element == button_headless_toggle:
@@ -151,7 +167,7 @@ def run_ai_vs_ai_menu():
                         event.ui_element.set_text("Yes" if options["headless"] else "No")
                     elif event.ui_element == button_browse_scarlet:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((50, 150), (260, 300)),
                             manager=manager,
                             window_title="Select Scarlet AI File",
                             initial_file_path=os.getcwd()
@@ -159,7 +175,7 @@ def run_ai_vs_ai_menu():
                         active_file_dialog.custom_title = "Select Scarlet AI File"
                     elif event.ui_element == button_browse_gold:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((50, 150), (260, 300)),
                             manager=manager,
                             window_title="Select Gold AI File",
                             initial_file_path=os.getcwd()
@@ -178,7 +194,6 @@ def run_ai_vs_ai_menu():
                             options["scarlet_ai"] = event.text
                         elif event.ui_element.custom_title == "Select Gold AI File":
                             options["gold_ai"] = event.text
-
             manager.process_events(event)
         manager.update(time_delta)
         screen.fill((50, 50, 50))
@@ -188,34 +203,34 @@ def run_ai_vs_ai_menu():
 
 def run_ai_vs_player_menu():
     pygame.init()
-    screen = pygame.display.set_mode((600, 500))
+    screen = pygame.display.set_mode((360, 640))
     pygame.display.set_caption("AI vs Player Options")
-    manager = pygame_gui.UIManager((600, 500))
+    manager = pygame_gui.UIManager((360, 640))
 
     label_ai_side = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 50), (200, 40)),
+        relative_rect=pygame.Rect((20, 50), (120, 30)),
         text="AI Side:",
         manager=manager
     )
     button_toggle_ai_side = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((300, 50), (200, 40)),
+        relative_rect=pygame.Rect((150, 50), (180, 30)),
         text="Gold",
         manager=manager
     )
 
     button_browse_ai = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((50, 110), (200, 40)),
+        relative_rect=pygame.Rect((20, 100), (140, 30)),
         text="Browse AI File",
         manager=manager
     )
     label_ai_file = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((300, 110), (200, 40)),
+        relative_rect=pygame.Rect((170, 100), (160, 30)),
         text="None",
         manager=manager
     )
 
     button_start = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 350), (200, 50)),
+        relative_rect=pygame.Rect((80, 550), (200, 40)),
         text="Start",
         manager=manager
     )
@@ -246,7 +261,7 @@ def run_ai_vs_player_menu():
                             button_toggle_ai_side.set_text("Gold")
                     elif event.ui_element == button_browse_ai:
                         active_file_dialog = pygame_gui.windows.UIFileDialog(
-                            rect=pygame.Rect((100, 50), (400, 300)),
+                            rect=pygame.Rect((50, 150), (260, 300)),
                             manager=manager,
                             window_title="Select AI File",
                             initial_file_path=os.getcwd()
@@ -267,46 +282,44 @@ def run_ai_vs_player_menu():
 
 def run_tournament_menu():
     pygame.init()
-    screen = pygame.display.set_mode((600, 600))
+    screen = pygame.display.set_mode((360, 640))
     pygame.display.set_caption("Tournament Options")
-    manager = pygame_gui.UIManager((600, 600))
+    manager = pygame_gui.UIManager((360, 640))
 
     label_rounds = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 50), (200, 40)),
+        relative_rect=pygame.Rect((20, 50), (120, 30)),
         text="Rounds:",
         manager=manager
     )
     input_rounds = pygame_gui.elements.UITextEntryLine(
-        relative_rect=pygame.Rect((300, 50), (200, 40)),
+        relative_rect=pygame.Rect((150, 50), (180, 30)),
         manager=manager
     )
     input_rounds.set_text("5")
 
     label_csv = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((50, 110), (200, 40)),
+        relative_rect=pygame.Rect((20, 100), (120, 30)),
         text="Output CSV:",
         manager=manager
     )
     input_csv = pygame_gui.elements.UITextEntryLine(
-        relative_rect=pygame.Rect((300, 110), (200, 40)),
+        relative_rect=pygame.Rect((150, 100), (180, 30)),
         manager=manager
     )
     input_csv.set_text("logs/tournament_results.csv")
 
-    # Create 8 file selection buttons and labels for 8 bots.
     bot_buttons = []
     bot_labels = []
-    # Default file paths are now set to None (meaning use RandomAI).
     default_paths = [None for _ in range(8)]
     for i in range(8):
-        y_pos = 180 + i * 40
+        y_pos = 150 + i * 35
         btn = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((50, y_pos), (200, 35)),
+            relative_rect=pygame.Rect((20, y_pos), (140, 30)),
             text=f"Browse Bot {i+1}",
             manager=manager
         )
         lbl = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect((300, y_pos), (250, 35)),
+            relative_rect=pygame.Rect((170, y_pos), (160, 30)),
             text=str(default_paths[i]),
             manager=manager
         )
@@ -314,7 +327,7 @@ def run_tournament_menu():
         bot_labels.append(lbl)
 
     button_start = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((200, 520), (200, 50)),
+        relative_rect=pygame.Rect((80, 580), (200, 40)),
         text="Start Tournament",
         manager=manager
     )
@@ -341,7 +354,7 @@ def run_tournament_menu():
                     for i, btn in enumerate(bot_buttons):
                         if event.ui_element == btn:
                             active_file_dialog = pygame_gui.windows.UIFileDialog(
-                                rect=pygame.Rect((100, 50), (400, 300)),
+                                rect=pygame.Rect((50, 150), (260, 300)),
                                 manager=manager,
                                 window_title=f"Select Bot {i+1} File",
                                 initial_file_path=os.getcwd()
@@ -354,9 +367,8 @@ def run_tournament_menu():
                         except ValueError:
                             options["tournament_rounds"] = 5
                         options["output_csv"] = input_csv.get_text() or "logs/tournament_results.csv"
-                        # Update the bot file paths from the labels.
                         for i, lbl in enumerate(bot_labels):
-                            options["bot_file_paths"][i] = lbl.text  # using the .text property
+                            options["bot_file_paths"][i] = lbl.text
                         running = False
                 if event.user_type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
                     if hasattr(event.ui_element, "custom_title"):
