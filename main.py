@@ -6,15 +6,13 @@ from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS, TOTAL_SQUARES
 from ai import RandomAI
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
-from common import (CELL_SIZE, BOARD_GAP, BOARD_LEFT_MARGIN, BOARD_TOP_MARGIN, SIDE_PANEL_WIDTH,
-                    load_assets, screen_to_board, draw_board, window_to_design,
-                    BOARD_ROWS, BOARD_COLS, NUM_BOARDS, LIGHT_SQUARE, DARK_SQUARE, LINE_COLOR)
+from common import BG_SCALE_X, BG_SCALE_Y, CELL_SIZE, LIGHT_SQUARE, DARK_SQUARE, LINE_COLOR, load_assets, draw_board, screen_to_board
 from simulation import simulate_ai_vs_ai_game  # Make sure simulation.py is available
 
 def warmup_moves():
     screen = pygame.display.get_surface()
     if screen is None:
-        screen = pygame.display.set_mode((360, 640))
+        screen = pygame.display.set_mode((720, 1280))
     font = pygame.font.Font("assets/pixel.ttf", 36)
     text = font.render("Loading...", True, (255, 255, 255))
     screen.fill((0, 0, 0))
@@ -57,10 +55,8 @@ def main():
     else:
         options = {}
 
-    board_width = BOARD_COLS * CELL_SIZE
-    total_board_width = BOARD_LEFT_MARGIN * 2 + NUM_BOARDS * board_width + (NUM_BOARDS - 1) * BOARD_GAP
-    design_width = total_board_width + SIDE_PANEL_WIDTH
-    design_height = BOARD_TOP_MARGIN + BOARD_ROWS * CELL_SIZE + 20
+    # Set vertical design resolution to 720x1280.
+    design_width, design_height = (720, 1280)
     design_resolution = (design_width, design_height)
     print(f"Gameplay design resolution: {design_width}x{design_height}")
 
@@ -71,14 +67,17 @@ def main():
         pygame.quit()
         return
 
-    # Create a resizable game window (initially 1280x720, 16:9)
-    screen = pygame.display.set_mode((1280, 720), flags)
+    # Create a resizable game window (initially 720x1280, portrait)
+    screen = pygame.display.set_mode((720, 1280), flags)
     pygame.display.set_caption("Dragonchess")
     base_surface = pygame.Surface(design_resolution)
     assets = load_assets(CELL_SIZE)
     clock = pygame.time.Clock()
-    bg = pygame.image.load(os.path.join("assets", "bg.png")).convert()
-    bg = pygame.transform.scale(bg, (design_width - SIDE_PANEL_WIDTH, design_height))
+    # Load new vertical background image.
+    bg = pygame.image.load(os.path.join("assets", "bg_vertical.png")).convert()
+
+    # Scale the background image using its original dimensions multiplied by the factors.
+    bg = pygame.transform.scale(bg, (int(bg.get_width() * BG_SCALE_X), int(bg.get_height() * BG_SCALE_Y)))
 
     if mode in ["2 Player", "AI vs Player"]:
         game = Game()
@@ -99,52 +98,50 @@ def main():
                 if event.type == pygame.QUIT:
                     running = False
                 if event.type == pygame.MOUSEBUTTONUP:
-                    # In AI vs Player, only process clicks when it's human's turn.
+                    # In AI vs Player, only process clicks when it's the human's turn.
                     if mode == "AI vs Player" and game.current_turn != human_side:
                         continue
-                    design_mouse = window_to_design(pygame.mouse.get_pos(), design_resolution)
-                    if design_mouse:
-                        board_pos = screen_to_board(design_mouse)
-                        if board_pos:
-                            idx = pos_to_index(*board_pos)
-                            # In AI vs Player, ensure the piece belongs to the human.
-                            if mode == "AI vs Player":
-                                if human_side == "Gold":
-                                    valid_piece = game.board[idx] > 0
-                                else:
-                                    valid_piece = game.board[idx] < 0
+                    # Use the raw mouse position.
+                    design_mouse = pygame.mouse.get_pos()
+                    board_pos = screen_to_board(design_mouse)
+                    if board_pos:
+                        idx = pos_to_index(*board_pos)
+                        # For AI vs Player, ensure the piece belongs to the human.
+                        if mode == "AI vs Player":
+                            valid_piece = game.board[idx] > 0 if human_side == "Gold" else game.board[idx] < 0
+                        else:
+                            valid_piece = (game.board[idx] != 0)
+                        if selected_index is None:
+                            if valid_piece:
+                                selected_index = idx
+                                moves_list = game.get_legal_moves_for(selected_index)
+                                legal_destinations = {move[1] for move in moves_list}
+                        else:
+                            if idx in legal_destinations:
+                                moves_list = game.get_legal_moves_for(selected_index)
+                                for move in moves_list:
+                                    if move[1] == idx:
+                                        game.make_move(move)
+                                        break
+                                selected_index = None
+                                legal_destinations = None
                             else:
-                                valid_piece = (game.board[idx] != 0)
-                            if selected_index is None:
                                 if valid_piece:
                                     selected_index = idx
                                     moves_list = game.get_legal_moves_for(selected_index)
                                     legal_destinations = {move[1] for move in moves_list}
-                            else:
-                                if idx in legal_destinations:
-                                    moves_list = game.get_legal_moves_for(selected_index)
-                                    for move in moves_list:
-                                        if move[1] == idx:
-                                            game.make_move(move)
-                                            break
+                                else:
                                     selected_index = None
                                     legal_destinations = None
-                                else:
-                                    if valid_piece:
-                                        selected_index = idx
-                                        moves_list = game.get_legal_moves_for(selected_index)
-                                        legal_destinations = {move[1] for move in moves_list}
-                                    else:
-                                        selected_index = None
-                                        legal_destinations = None
             if mode == "AI vs Player" and game.current_turn != human_side:
                 move = ai.choose_move()
                 if move:
                     game.make_move(move)
             game.update()
-            # If game is over, exit the loop.
+            # Exit if game is over.
             if game.game_over:
                 running = False
+            # Draw the entire screen including background, boards, move list, and text box.
             draw_board(base_surface, game, assets, bg, selected_index, legal_destinations)
             window_width, window_height = pygame.display.get_surface().get_size()
             scale = min(window_width / design_width, window_height / design_height)
@@ -170,46 +167,20 @@ def main():
                            for game_num in range(1, num_games+1)]
                 for future in as_completed(futures):
                     result = future.result()
-                    results.append(result)
-            with open(log_filename, "w", newline="") as csvfile:
-                fieldnames = ["game_number", "full_record", "winner"]
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=",", quoting=csv.QUOTE_NONE, escapechar="\\")
-                writer.writeheader()
-                for game_num, move_notations, winner in results:
-                    writer.writerow({"game_number": game_num, "full_record": "|".join(move_notations), "winner": winner})
         else:
-            # Non-headless AI vs AI: run a game loop with rendering.
             game = Game()
             ai_gold = RandomAI(game, "Gold")
             ai_scarlet = RandomAI(game, "Scarlet")
-            running = True
-            while running:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                if game.current_turn == "Gold":
-                    move = ai_gold.choose_move()
-                else:
-                    move = ai_scarlet.choose_move()
+            while not game.game_over:
+                move = ai_gold.choose_move() if game.current_turn == "Gold" else ai_scarlet.choose_move()
                 if move:
                     game.make_move(move)
                 game.update()
                 draw_board(base_surface, game, assets, bg)
-                window_width, window_height = pygame.display.get_surface().get_size()
-                scale = min(window_width / design_width, window_height / design_height)
-                scaled_width = int(design_width * scale)
-                scaled_height = int(design_height * scale)
-                scaled_surface = pygame.transform.scale(base_surface, (scaled_width, scaled_height))
-                final_surface = pygame.Surface((window_width, window_height))
-                final_surface.fill((0,0,0))
-                final_surface.blit(scaled_surface, ((window_width-scaled_width)//2, (window_height-scaled_height)//2))
-                pygame.display.get_surface().blit(final_surface, (0, 0))
+                screen.blit(base_surface, (0, 0))
                 pygame.display.update()
-                if game.game_over:
-                    running = False
-        pygame.quit()
-    else:
-        pygame.quit()
+                time.sleep(0.25)
+    pygame.quit()
 
 if __name__ == "__main__":
     main()
