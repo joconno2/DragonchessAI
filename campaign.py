@@ -4,9 +4,10 @@ import pygame
 import pygame_gui
 import importlib.util
 from game import Game, pos_to_index
-from common import (CELL_SIZE, BOARD_GAP, BOARD_LEFT_MARGIN, BOARD_TOP_MARGIN, SIDE_PANEL_WIDTH,
-                    load_assets, screen_to_board, draw_board, window_to_design,
+from common import (CELL_SIZE, BOARD_GAP, SIDE_PANEL_WIDTH,
+                    load_assets, screen_to_board, draw_board,
                     BOARD_ROWS, BOARD_COLS, NUM_BOARDS)
+
 
 # Helper: add a gold border to a given image.
 def add_gold_border(image, border_thickness=3):
@@ -257,22 +258,32 @@ def run_opponent_selection(profile, slot):
         pygame.display.update()
 
 def run_campaign_game(profile, opponent):
-    board_width = CELL_SIZE * 12
-    total_board_width = BOARD_LEFT_MARGIN * 2 + 3 * board_width + 2 * BOARD_GAP
-    design_width = total_board_width + SIDE_PANEL_WIDTH
-    design_height = BOARD_TOP_MARGIN + BOARD_ROWS * CELL_SIZE + 20
-    design_resolution = (design_width, design_height)
+    from common import (CELL_SIZE, BOARD_GAP, SIDE_PANEL_WIDTH, TEXTBOX_HEIGHT,
+                        BOARD_ROWS, BOARD_COLS, NUM_BOARDS,
+                        load_assets, screen_to_board, draw_board,
+                        DESIGN_WIDTH, DESIGN_HEIGHT, BG_SCALE_X, BG_SCALE_Y)
+    import sys, os, pygame, time
+    from game import Game, pos_to_index
+    from campaign import save_profile, load_custom_ai
     flags = pygame.RESIZABLE
-    screen = pygame.display.set_mode((1280, 720), flags)
+
+    # Use the new design resolution from common.py.
+    design_width = DESIGN_WIDTH
+    design_height = DESIGN_HEIGHT
+    design_resolution = (design_width, design_height)
+
+    # Create the game window using the new design resolution.
+    screen = pygame.display.set_mode(design_resolution, flags)
     pygame.display.set_caption(f"Campaign Game: {profile['player_name']} vs {opponent['name']}")
-    
+
     assets = load_assets(CELL_SIZE)
-    bg = pygame.image.load(os.path.join("assets", "bg.png")).convert()
-    bg = pygame.transform.scale(bg, (design_width - SIDE_PANEL_WIDTH, design_height))
-    
+    # Load and scale the new vertical background image.
+    bg = pygame.image.load(os.path.join("assets", "bg_vertical.png")).convert()
+    bg = pygame.transform.scale(bg, (int(bg.get_width() * BG_SCALE_X), int(bg.get_height() * BG_SCALE_Y)))
+
     game = Game()
     enemy_ai = load_custom_ai(opponent["ai_file"], game, "Scarlet")
-    
+
     selected_index = None
     legal_destinations = None
     clock = pygame.time.Clock()
@@ -285,34 +296,35 @@ def run_campaign_game(profile, opponent):
                 running_game = False
                 break
             if event.type == pygame.MOUSEBUTTONUP:
+                # Allow human moves only during Gold's turn.
                 if game.current_turn == "Gold":
-                    design_mouse = window_to_design(pygame.mouse.get_pos(), design_resolution)
-                    if design_mouse:
-                        board_pos = screen_to_board(design_mouse)
-                        if board_pos:
-                            idx = pos_to_index(*board_pos)
-                            if selected_index is None:
+                    design_mouse = pygame.mouse.get_pos()
+                    board_pos = screen_to_board(design_mouse)
+                    if board_pos:
+                        idx = pos_to_index(*board_pos)
+                        if selected_index is None:
+                            if game.board[idx] > 0:
+                                selected_index = idx
+                                moves_list = game.get_legal_moves_for(selected_index)
+                                legal_destinations = {move[1] for move in moves_list}
+                        else:
+                            if idx in legal_destinations:
+                                moves_list = game.get_legal_moves_for(selected_index)
+                                for move in moves_list:
+                                    if move[1] == idx:
+                                        game.make_move(move)
+                                        break
+                                selected_index = None
+                                legal_destinations = None
+                            else:
                                 if game.board[idx] > 0:
                                     selected_index = idx
                                     moves_list = game.get_legal_moves_for(selected_index)
                                     legal_destinations = {move[1] for move in moves_list}
-                            else:
-                                if idx in legal_destinations:
-                                    moves_list = game.get_legal_moves_for(selected_index)
-                                    for move in moves_list:
-                                        if move[1] == idx:
-                                            game.make_move(move)
-                                            break
+                                else:
                                     selected_index = None
                                     legal_destinations = None
-                                else:
-                                    if game.board[idx] > 0:
-                                        selected_index = idx
-                                        moves_list = game.get_legal_moves_for(selected_index)
-                                        legal_destinations = {move[1] for move in moves_list}
-                                    else:
-                                        selected_index = None
-                                        legal_destinations = None
+        # Let the enemy AI play when it's Scarlet's turn.
         if game.current_turn == "Scarlet":
             move = enemy_ai.choose_move()
             if move:
@@ -329,7 +341,7 @@ def run_campaign_game(profile, opponent):
         final_surface.blit(scaled_surface, ((window_width - scaled_width) // 2, (window_height - scaled_height) // 2))
         screen.blit(final_surface, (0, 0))
         pygame.display.update()
-    
+
     if game.winner == "Gold":
         print("You win!")
         profile["wins"] = profile.get("wins", 0) + 1
@@ -344,6 +356,7 @@ def run_campaign_game(profile, opponent):
     slot = profile.get("slot", 1)
     save_profile(slot, profile)
     return
+
 
 def save_profile(slot, data):
     os.makedirs("saves", exist_ok=True)
