@@ -10,15 +10,19 @@ def run_menu():
     pygame.display.set_caption("Dragonchess Menu")
     manager = pygame_gui.UIManager((360, 640))
 
+    # Load and scale the main menu background image.
+    background = pygame.image.load(os.path.join("assets", "main_menu_1.png")).convert()
+    background = pygame.transform.scale(background, (360, 640))
+
     # Title configuration.
     title_font = pygame.font.Font("assets/pixel.ttf", 36)
     title_text = title_font.render("Dragonchess", True, (255, 255, 255))
     title_rect = title_text.get_rect(center=(180, 80))
 
     # Button configuration.
-    button_width = 280
+    button_width = 140
     button_height = 40
-    button_x = 40
+    button_x = 110
     button_y_start = 140
     button_gap = 60
 
@@ -79,12 +83,15 @@ def run_menu():
                         running = False
             manager.process_events(event)
         manager.update(time_delta)
-        screen.fill((30, 30, 30))
+        # Blit the main menu background image first...
+        screen.blit(background, (0, 0))
+        # ...then draw the title and the UI elements on top.
         screen.blit(title_text, title_rect)
         manager.draw_ui(screen)
         pygame.display.update()
 
     return mode, custom_ai
+
 
 def run_ai_vs_ai_menu():
     pygame.init()
