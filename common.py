@@ -1,31 +1,28 @@
 import os
 import pygame
 
-# ===== Global Layout Variables (tweak these for debugging/layout) =====
-DESIGN_WIDTH = 720                # Overall design width
-DESIGN_HEIGHT = 1280              # Overall design height
+# ===== Global Layout Variables =====
+DESIGN_WIDTH = 1825                # Horizontal resolution
+DESIGN_HEIGHT = 660                # Height for 16:9 aspect ratio
 DESIGN_RESOLUTION = (DESIGN_WIDTH, DESIGN_HEIGHT)
 
-BG_SCALE_X = 1  # Scale factor for width
-BG_SCALE_Y = 1   # Scale factor for height
-BACKGROUND_SCALE = 1            # Scale factor for the background image (e.g., 0.8)
-OFFSET_ADJUST = 100                # Fixed offset adjustment to nudge the background up/left
+BG_SCALE_X = 1                    # Background scale factors
+BG_SCALE_Y = 1
+BACKGROUND_SCALE = 1              # Background image scaling
+OFFSET_ADJUST = 50                # Fixed offset adjustment
 
-CELL_SIZE = 40                    # Size for each board cell (square)
-
-BOARD_COLS = 12                   # Number of columns per board
-BOARD_ROWS = 8                    # Number of rows per board
-NUM_BOARDS = 3                   # Total boards (stacked vertically)
-
-BOARD_GAP = 37                    # Vertical gap between boards
-BOARD_AREA_WIDTH = BOARD_COLS * CELL_SIZE
-BOARD_AREA_HEIGHT = NUM_BOARDS * BOARD_ROWS * CELL_SIZE + (NUM_BOARDS - 1) * BOARD_GAP
+CELL_SIZE = 40                    # Size of each board cell
+BOARD_COLS = 12                   # Columns per board
+BOARD_ROWS = 8                    # Rows per board
+NUM_BOARDS = 3                    # Total boards (arranged horizontally)
+BOARD_GAP = 60                    # Gap between boards (horizontal gap)
+BOARD_OFFSET_ADJUST = -50          # Offset adjustment for board origin
 
 SIDE_PANEL_WIDTH = 185            # Width reserved for the move list panel (right side)
 TEXTBOX_HEIGHT = 200              # Height reserved for the text box at the bottom
 
-MOVE_FONT_SIZE = 34  # Increase as desired
-TEXTBOX_FONT_SIZE = 24  # Increase as desired
+MOVE_FONT_SIZE = 34  
+TEXTBOX_FONT_SIZE = 24  
 
 MOVE_FONT_SIZE = 24            # Font size for the side panel move list text
 SIDE_PANEL_SCALE_X = 1         # Horizontal scale factor for the side panel image
@@ -34,6 +31,11 @@ SIDE_PANEL_SCALE_Y = 1         # Vertical scale factor for the side panel image
 BOTTOM_PANEL_SCALE_X = 1       # Horizontal scale factor for the bottom panel image
 BOTTOM_PANEL_SCALE_Y = 1       # Vertical scale factor for the bottom panel image
 TEXTBOX_FONT_SIZE = 24         # Font size for the bottom panel text
+
+
+# Compute total board area for horizontal layout.
+BOARD_AREA_WIDTH = NUM_BOARDS * BOARD_COLS * CELL_SIZE + (NUM_BOARDS - 1) * BOARD_GAP
+BOARD_AREA_HEIGHT = BOARD_ROWS * CELL_SIZE
 
 # ===== Colors =====
 LIGHT_SQUARE = (240, 217, 181)
@@ -87,67 +89,79 @@ def load_assets(cell_size):
             assets[code] = None
     return assets
 
-# ===== Screen-to-Board Mapping =====
 def screen_to_board(design_pos, board_cols=BOARD_COLS, board_rows=BOARD_ROWS, num_boards=NUM_BOARDS):
     """
-    Convert a click position (x,y) in design space to a (layer, row, col) tuple.
-    The boards are drawn centered relative to the background image which is scaled by BACKGROUND_SCALE
-    and nudged by OFFSET_ADJUST.
+    Converts a click position (x, y) in design space into a (layer, row, col) tuple,
+    for the horizontal board layout with a right-side panel.
+    
+    In this version, a vertical click offset (VERTICAL_CLICK_OFFSET) is added to the y coordinate,
+    so that clicks register at the expected vertical location.
+    
+    Returns None if the click is outside the board area or falls within a gap.
     """
+    # Adjust this value until the click aligns correctly.
+    VERTICAL_CLICK_OFFSET = 100
+    
     x, y = design_pos
-    # Compute background dimensions and placement
-    bg_width = int(DESIGN_WIDTH * BACKGROUND_SCALE)
-    bg_height = int(DESIGN_HEIGHT * BACKGROUND_SCALE)
-    bg_x = (DESIGN_WIDTH - bg_width) // 2 - OFFSET_ADJUST
-    bg_y = (DESIGN_HEIGHT - bg_height) // 2 - OFFSET_ADJUST
+    # Apply the vertical offset.
+    y += VERTICAL_CLICK_OFFSET
 
-    # Compute the board drawing origin within the background image.
-    board_origin_x = bg_x + (bg_width - BOARD_AREA_WIDTH) // 2
-    board_origin_y = bg_y + (bg_height - BOARD_AREA_HEIGHT) // 2
+    # Compute the width available for boards (i.e. the game area).
+    game_area_width = DESIGN_WIDTH - SIDE_PANEL_WIDTH
 
-    # If the click is within the board area, compute its cell.
-    if board_origin_x <= x < board_origin_x + BOARD_AREA_WIDTH and board_origin_y <= y < board_origin_y + BOARD_AREA_HEIGHT:
+    # Center the board area (which is BOARD_AREA_WIDTH wide) within the game area.
+    board_origin_x = (game_area_width - BOARD_AREA_WIDTH) // 2
+    board_origin_y = (DESIGN_HEIGHT - BOARD_AREA_HEIGHT) // 2 - BOARD_OFFSET_ADJUST
+
+    # Check if the click (with adjusted y) falls within the board area.
+    if board_origin_x <= x < board_origin_x + BOARD_AREA_WIDTH and \
+       board_origin_y <= y < board_origin_y + BOARD_AREA_HEIGHT:
         relative_x = x - board_origin_x
         relative_y = y - board_origin_y
-        board_unit_height = BOARD_ROWS * CELL_SIZE + BOARD_GAP
-        layer = min(relative_y // board_unit_height, num_boards - 1)
-        row = (relative_y - layer * board_unit_height) // CELL_SIZE  # <--- Changed line!
-        col = relative_x // CELL_SIZE
-        return (int(layer), int(row), int(col))
+        # Each board occupies a slot with width = (BOARD_COLS * CELL_SIZE + BOARD_GAP).
+        slot_width = BOARD_COLS * CELL_SIZE + BOARD_GAP
+        layer = int(relative_x // slot_width)
+        within_layer_x = relative_x - layer * slot_width
+        # If the click falls in the gap between boards, ignore it.
+        if within_layer_x >= BOARD_COLS * CELL_SIZE:
+            return None
+        col = int(within_layer_x // CELL_SIZE)
+        row = int(relative_y // CELL_SIZE)
+        return (layer, row, col)
     return None
 
 
-# ===== Draw the Game Screen =====
+
+
+# ===== Draw the Game Screen for Horizontal Layout =====
 def draw_board(surface, game, assets, bg, selected_index=None, legal_destinations=None,
                board_cols=BOARD_COLS, board_rows=BOARD_ROWS, num_boards=NUM_BOARDS):
     """
-    Render the complete game screen including:
-      - The repositioned background image.
-      - The game boards (stacked vertically) centered relative to the background.
-      - A move list panel on the right.
-      - A text box panel at the bottom.
+    Renders the complete game board onto a surface.
+    The background is drawn, and then the boards are rendered side-by-side (horizontally)
+    centered within the background image.
     """
-    # Draw background image at the computed position
+    # Draw background image.
     bg_width, bg_height = bg.get_width(), bg.get_height()
     bg_x = 0
     bg_y = 0
     surface.blit(bg, (bg_x, bg_y))
 
-    
-    # Compute board origin (center boards within the background image)
+    # Compute board origin to center the horizontal board area.
     board_origin_x = bg_x + (bg_width - BOARD_AREA_WIDTH) // 2
-    board_origin_y = bg_y + (bg_height - BOARD_AREA_HEIGHT) // 2
+    board_origin_y = bg_y + (bg_height - BOARD_AREA_HEIGHT) // 2 - BOARD_OFFSET_ADJUST
 
     font = pygame.font.Font("assets/pixel.ttf", 20)
     frozen_overlay = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
     frozen_overlay.fill((0, 150, 255, 100))
-    
-    # Draw each board (vertically stacked)
+
+    # Iterate over each board (layer) and draw its cells.
     for layer in range(num_boards):
-        board_y_start = board_origin_y + layer * (BOARD_ROWS * CELL_SIZE + BOARD_GAP)
+        board_x_start = board_origin_x + layer * (BOARD_COLS * CELL_SIZE + BOARD_GAP)
+        board_y_start = board_origin_y
         for row in range(board_rows):
             for col in range(board_cols):
-                rect = pygame.Rect(board_origin_x + col * CELL_SIZE,
+                rect = pygame.Rect(board_x_start + col * CELL_SIZE,
                                    board_y_start + row * CELL_SIZE,
                                    CELL_SIZE, CELL_SIZE)
                 square_color = LIGHT_SQUARE if (row + col) % 2 == 0 else DARK_SQUARE
@@ -164,16 +178,12 @@ def draw_board(surface, game, assets, bg, selected_index=None, legal_destination
                         text = font.render(game.piece_letter(piece), True, (0, 0, 0))
                         text_rect = text.get_rect(center=rect.center)
                         surface.blit(text, text_rect)
-                if game.frozen[idx]:
-                    surface.blit(frozen_overlay, rect.topleft)
-                if selected_index is not None and idx == selected_index:
+                # Highlight selected piece and legal moves.
+                if selected_index == idx:
                     pygame.draw.rect(surface, (0, 255, 0), rect, 3)
                 if legal_destinations and idx in legal_destinations:
-                    pygame.draw.rect(surface, (0, 0, 255), rect, 3)
-        board_rect = pygame.Rect(board_origin_x, board_y_start, BOARD_AREA_WIDTH, BOARD_ROWS * CELL_SIZE)
-        pygame.draw.rect(surface, LINE_COLOR, board_rect, 3)
-    
-    # --- Draw the side panel with the side_panel.png image ---
+                    pygame.draw.rect(surface, (255, 0, 0), rect, 3)
+# --- Draw the side panel with the side_panel.png image ---
     # Load the side panel image from assets (it is loaded fresh each time; for performance you might cache it)
     side_panel_img = pygame.image.load(os.path.join("assets", "side_panel.png")).convert_alpha()
     # Scale the side panel image using the global scaling factors;
@@ -192,12 +202,12 @@ def draw_board(surface, game, assets, bg, selected_index=None, legal_destination
     # --- Draw the move list text on top of the side panel ---
     move_font = pygame.font.Font("assets/pixel.ttf", MOVE_FONT_SIZE)
     move_color = (0, 0, 0)  # black font color
-    text_y = 70
+    text_y = 40
     # Determine how many lines fit; here we approximate using MOVE_FONT_SIZE for line height (plus a little spacing)
-    max_lines = (side_panel_target_height - 20) // (MOVE_FONT_SIZE + 2)
+    max_lines = (side_panel_target_height - 80) // (MOVE_FONT_SIZE + 2)
     for move_str in game.move_notations[-max_lines:]:
         txt = move_font.render(move_str, True, move_color)
-        surface.blit(txt, (side_panel_x + 10, text_y))
+        surface.blit(txt, (side_panel_x + 30, text_y))
         text_y += MOVE_FONT_SIZE + 2
 
 
@@ -222,3 +232,22 @@ def draw_board(surface, game, assets, bg, selected_index=None, legal_destination
     #tb_font = pygame.font.Font("assets/pixel.ttf", TEXTBOX_FONT_SIZE)
     #placeholder = tb_font.render("Enter move:", True, (0, 0, 0))
     #surface.blit(placeholder, (10, bottom_panel_y + (bottom_panel_target_height - placeholder.get_height()) // 2))
+
+    # Define the board names for each board layer.
+    board_names = ["Sky", "Ground", "Underworld"]
+
+    # Load the custom font (you can adjust the font size as needed).
+    board_name_font = pygame.font.Font("assets/font.ttf", 45)
+
+    # Loop over each board (layer) and draw its name above the board.
+    for layer in range(NUM_BOARDS):
+        # Compute the starting x-coordinate for this board.
+        board_x_start = board_origin_x + layer * (BOARD_COLS * CELL_SIZE + BOARD_GAP)
+        # Render the board name text.
+        name_text = board_name_font.render(board_names[layer], True, (255, 255, 255))
+        # Calculate an x position to center the text above the board.
+        text_x = board_x_start + (BOARD_COLS * CELL_SIZE) // 2 - name_text.get_width() // 2
+        # Position the text slightly above the board (adjust the offset as needed).
+        text_y = board_origin_y - name_text.get_height() - 45
+        # Blit (draw) the board name text onto the surface.
+        surface.blit(name_text, (text_x, text_y))

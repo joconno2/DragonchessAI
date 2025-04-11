@@ -6,18 +6,18 @@ from bitboard import BOARD_ROWS, BOARD_COLS, NUM_BOARDS, TOTAL_SQUARES
 from ai import RandomAI
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
-from common import BG_SCALE_X, BG_SCALE_Y, CELL_SIZE, LIGHT_SQUARE, DARK_SQUARE, LINE_COLOR, load_assets, draw_board, screen_to_board
-from simulation import simulate_ai_vs_ai_game  # Make sure simulation.py is available
+from common import BG_SCALE_X, BG_SCALE_Y, CELL_SIZE, LIGHT_SQUARE, DARK_SQUARE, LINE_COLOR, load_assets, draw_board, screen_to_board, DESIGN_WIDTH, DESIGN_HEIGHT
+from simulation import simulate_ai_vs_ai_game  # Ensure simulation.py is available
 
 def warmup_moves():
     screen = pygame.display.get_surface()
     if screen is None:
-        screen = pygame.display.set_mode((720, 1280))
+        screen = pygame.display.set_mode((DESIGN_WIDTH, DESIGN_HEIGHT))
     font = pygame.font.Font("assets/pixel.ttf", 36)
     text = font.render("Loading...", True, (255, 255, 255))
     screen.fill((0, 0, 0))
-    screen.blit(text, (screen.get_width()//2 - text.get_width()//2,
-                        screen.get_height()//2 - text.get_height()//2))
+    screen.blit(text, (screen.get_width() // 2 - text.get_width() // 2,
+                        screen.get_height() // 2 - text.get_height() // 2))
     pygame.display.update()
     dummy_board = np.zeros(TOTAL_SQUARES, dtype=np.int16)
     dummy_pos = (0, 0, 0)
@@ -55,39 +55,35 @@ def main():
     else:
         options = {}
 
-    # Set vertical design resolution to 720x1280.
-    design_width, design_height = (720, 1280)
+    # Use the horizontal design resolution: 1600x900 (16:9 aspect ratio)
+    design_width, design_height = (DESIGN_WIDTH, DESIGN_HEIGHT)
     design_resolution = (design_width, design_height)
     print(f"Gameplay design resolution: {design_width}x{design_height}")
 
-    # For Tournament mode, run tournament simulation.
     if mode == "Tournament":
         import tournament
         tournament.run_tournament(options)
         pygame.quit()
         return
 
-    # Create a resizable game window (initially 720x1280, portrait)
-    screen = pygame.display.set_mode((720, 1280), flags)
+    # Create a resizable game window (initially 1600x900)
+    screen = pygame.display.set_mode((design_width, design_height), flags)
     pygame.display.set_caption("Dragonchess")
     base_surface = pygame.Surface(design_resolution)
     assets = load_assets(CELL_SIZE)
     clock = pygame.time.Clock()
-    # Load new vertical background image.
-    bg = pygame.image.load(os.path.join("assets", "bg_vertical.png")).convert()
-
-    # Scale the background image using its original dimensions multiplied by the factors.
+    # Load the horizontal background image.
+    bg = pygame.image.load(os.path.join("assets", "bg.png")).convert()
     bg = pygame.transform.scale(bg, (int(bg.get_width() * BG_SCALE_X), int(bg.get_height() * BG_SCALE_Y)))
 
     if mode in ["2 Player", "AI vs Player"]:
         game = Game()
         if mode == "AI vs Player":
-            # Determine AI side; human controls the opposite.
             ai_side = options.get("ai_side", "Gold")
             human_side = "Scarlet" if ai_side == "Gold" else "Gold"
             ai = load_custom_ai(options.get("ai_file"), game, ai_side) if options.get("ai_file") else RandomAI(game, ai_side)
         else:
-            human_side = None  # Two-player mode: allow moves for both.
+            human_side = None  # Two-player mode: both sides controlled by players.
         selected_index = None
         legal_destinations = None
         running = True
@@ -98,15 +94,18 @@ def main():
                 if event.type == pygame.QUIT:
                     running = False
                 if event.type == pygame.MOUSEBUTTONUP:
-                    # In AI vs Player, only process clicks when it's the human's turn.
+                    # In AI vs Player, process clicks only when it's the human's turn.
                     if mode == "AI vs Player" and game.current_turn != human_side:
                         continue
-                    # Use the raw mouse position.
-                    design_mouse = pygame.mouse.get_pos()
+                    # Convert mouse coordinates (window space) back to design coordinates.
+                    win_width, win_height = screen.get_size()
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    scale_x = design_width / win_width
+                    scale_y = design_height / win_height
+                    design_mouse = (mouse_x * scale_x, mouse_y * scale_y)
                     board_pos = screen_to_board(design_mouse)
                     if board_pos:
                         idx = pos_to_index(*board_pos)
-                        # For AI vs Player, ensure the piece belongs to the human.
                         if mode == "AI vs Player":
                             valid_piece = game.board[idx] > 0 if human_side == "Gold" else game.board[idx] < 0
                         else:
@@ -138,48 +137,34 @@ def main():
                 if move:
                     game.make_move(move)
             game.update()
-            # Exit if game is over.
             if game.game_over:
                 running = False
-            # Draw the entire screen including background, boards, move list, and text box.
+            # Draw on the base surface (at 1600x900 design resolution).
+            base_surface.fill((0, 0, 0))
             draw_board(base_surface, game, assets, bg, selected_index, legal_destinations)
-            window_width, window_height = pygame.display.get_surface().get_size()
-            scale = min(window_width / design_width, window_height / design_height)
-            scaled_width = int(design_width * scale)
-            scaled_height = int(design_height * scale)
-            scaled_surface = pygame.transform.scale(base_surface, (scaled_width, scaled_height))
-            final_surface = pygame.Surface((window_width, window_height))
-            final_surface.fill((0, 0, 0))
-            final_surface.blit(scaled_surface, ((window_width - scaled_width) // 2, (window_height - scaled_height) // 2))
-            screen.blit(final_surface, (0, 0))
-            pygame.display.update()
-        pygame.quit()
-
+            # Scale the base surface to the current window size.
+            scaled_surface = pygame.transform.scale(base_surface, screen.get_size())
+            screen.blit(scaled_surface, (0, 0))
+            pygame.display.flip()
     elif mode == "AI vs AI":
-        headless = options.get("headless", False)
-        num_games = options.get("num_games", 1)
-        log_filename = options.get("log_filename", "logs/ai_vs_ai_log.csv")
-        if headless:
-            results = []
-            max_workers = min(num_games, 10)
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(simulate_ai_vs_ai_game, game_num, options)
-                           for game_num in range(1, num_games+1)]
-                for future in as_completed(futures):
-                    result = future.result()
-        else:
-            game = Game()
-            ai_gold = RandomAI(game, "Gold")
-            ai_scarlet = RandomAI(game, "Scarlet")
-            while not game.game_over:
-                move = ai_gold.choose_move() if game.current_turn == "Gold" else ai_scarlet.choose_move()
-                if move:
-                    game.make_move(move)
-                game.update()
-                draw_board(base_surface, game, assets, bg)
-                screen.blit(base_surface, (0, 0))
-                pygame.display.update()
-                time.sleep(0.25)
+        game = Game()
+        running = True
+        while running:
+            time_delta = clock.tick(60) / 1000.0
+            if game.current_turn == "Gold":
+                move = RandomAI(game, "Gold").choose_move()
+            else:
+                move = RandomAI(game, "Scarlet").choose_move()
+            if move:
+                game.make_move(move)
+            game.update()
+            if game.game_over:
+                running = False
+            base_surface.fill((0, 0, 0))
+            draw_board(base_surface, game, assets, bg)
+            scaled_surface = pygame.transform.scale(base_surface, screen.get_size())
+            screen.blit(scaled_surface, (0, 0))
+            pygame.display.flip()
     pygame.quit()
 
 if __name__ == "__main__":
