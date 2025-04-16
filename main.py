@@ -38,6 +38,9 @@ def main():
     pygame.init()
     flags = pygame.RESIZABLE
 
+    pygame.display.set_icon(pygame.image.load(os.path.join("assets", "small_icon.png")))
+    pygame.display.set_caption("Dragonchess")
+
     mode, custom_ai_menu = run_menu()
     warmup_moves()
 
