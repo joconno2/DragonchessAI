@@ -1,0 +1,73 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake g++ libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build --parallel
+    
+    - name: Run tests
+      run: ./build/test_dragonchess
+    
+    - name: Test headless mode
+      run: |
+        ./build/dragonchess --headless --mode tournament --games 10 \
+          --gold-ai random --scarlet-ai greedy --quiet
+    
+    - name: Test plugin system
+      run: |
+        cd examples
+        g++ -std=c++17 -fPIC -O3 -I../src -shared \
+          ../src/simple_ai.cpp ../src/bitboard.cpp ../src/moves.cpp ../src/game.cpp \
+          random_bot.cpp -o random_bot.so
+        cd ..
+        ./build/dragonchess --headless --mode tournament --games 10 \
+          --gold-ai-plugin examples/random_bot.so --scarlet-ai random --quiet
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: dragonchess-linux
+        path: |
+          build/dragonchess
+          build/test_dragonchess
+
+  build-headless:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake g++
+    
+    - name: Configure CMake (headless only)
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHEADLESS_ONLY=ON
+    
+    - name: Build
+      run: cmake --build build --parallel
+    
+    - name: Performance benchmark
+      run: |
+        ./build/dragonchess --headless --mode tournament --games 100 \
+          --gold-ai greedy --scarlet-ai greedy --quiet

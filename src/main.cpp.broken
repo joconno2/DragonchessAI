@@ -1,0 +1,430 @@
+#include "game.h"
+#include "ai.h"
+#include "renderer.h"
+#include "input.h"
+#include "menu.h"
+#include <iostream>
+#include <unordered_set>
+#include <optional>
+#include <thread>
+#include <chrono>
+
+using namespace dragonchess;
+
+void run_two_player_game(Renderer& renderer, InputHandler& input);
+void run_ai_vs_player_game(Renderer& renderer, InputHandler& input, const AISettings& settings);
+void run_ai_vs_ai_game(Renderer& renderer, InputHandler& input, const AISettings& settings);
+void run_tournament_mode(Renderer& renderer, InputHandler& input);
+void run_campaign_mode(Renderer& renderer, InputHandler& input);
+
+int main(int argc, char* argv[]) {
+    // Initialize renderer
+    Renderer renderer;
+    if (!renderer.init("Dragonchess", 1920, 1080)) {
+        std::cerr << "Failed to initialize renderer" << std::endl;
+        return 1;
+    }
+    
+    if (!renderer.load_assets()) {
+        std::cerr << "Failed to load assets" << std::endl;
+        return 1;
+    }
+    
+    // Initialize menu
+    Menu menu;
+    if (!menu.init(renderer.get_renderer())) {
+        std::cerr << "Failed to initialize menu" << std::endl;
+        return 1;
+    }
+    
+    // Create input handler
+    InputHandler input;
+    
+    // Main menu loop
+    bool running = true;
+    while (running) {
+        GameMode mode = menu.show_main_menu(renderer.get_renderer());
+        
+        switch (mode) {
+            case GameMode::TWO_PLAYER:
+                run_two_player_game(renderer, input);
+                break;
+                
+            case GameMode::AI_VS_PLAYER: {
+                AISettings settings = menu.show_ai_vs_player_menu(renderer.get_renderer());
+                if (!settings.player_side.empty()) {
+                    run_ai_vs_player_game(renderer, input, settings);
+                }
+                break;
+            }
+                
+            case GameMode::AI_VS_AI: {
+                AISettings settings = menu.show_ai_vs_ai_menu(renderer.get_renderer());
+                run_ai_vs_ai_game(renderer, input, settings);
+                break;
+            }
+                
+            case GameMode::TOURNAMENT:
+                run_tournament_mode(renderer, input);
+                break;
+                
+            case GameMode::CAMPAIGN:
+                run_campaign_mode(renderer, input);
+                break;
+                
+            case GameMode::QUIT:
+                running = false;
+                break;
+        }
+    }
+    
+    return 0;
+}
+
+void run_two_player_game(Renderer& renderer, InputHandler& input) {
+    // Create game
+    Game game;
+    
+    // Game state
+    std::optional<int> selected;
+    std::unordered_set<int> legal_dest;
+    Game game;
+    
+    // Game state
+    std::optional<int> selected;
+    std::unordered_set<int> legal_dest;
+    
+    // Main game loop
+    bool running = true;
+    while (running && !game.game_over) {
+        int mouse_x = 0, mouse_y = 0;
+        InputEvent event = input.poll(mouse_x, mouse_y);
+        
+        switch (event) {
+            case InputEvent::QUIT:
+                running = false;
+                break;
+                
+            case InputEvent::MOUSE_CLICK: {
+                // Convert screen to board coordinates
+                auto pos = renderer.screen_to_board(mouse_x, mouse_y);
+                if (pos.has_value()) {
+                    auto [layer, row, col] = pos.value();
+                    int idx = pos_to_index(layer, row, col);
+                    int16_t piece = game.board[idx];
+                    
+                    // Check if this is a valid piece for current player
+                    bool valid_piece = (game.current_turn == Color::GOLD && piece > 0) ||
+                                      (game.current_turn == Color::SCARLET && piece < 0);
+                    
+                    if (!selected.has_value()) {
+                        // Select piece
+                        if (valid_piece) {
+                            selected = idx;
+                            auto moves = game.get_legal_moves_for(idx);
+                            legal_dest.clear();
+                            for (const auto& move : moves) {
+                                legal_dest.insert(std::get<1>(move));
+                            }
+                        }
+                    } else {
+                        // Try to make a move
+                        if (legal_dest.count(idx) > 0) {
+                            // Find the matching move
+                            auto moves = game.get_legal_moves_for(selected.value());
+                            for (const auto& move : moves) {
+                                if (std::get<1>(move) == idx) {
+                                    game.make_move(move);
+                                    game.update();
+                                    selected.reset();
+                                    legal_dest.clear();
+                                    break;
+                                }
+                            }
+                        } else if (valid_piece) {
+                            // Select different piece
+                            selected = idx;
+                            auto moves = game.get_legal_moves_for(idx);
+                            legal_dest.clear();
+                            for (const auto& move : moves) {
+                                legal_dest.insert(std::get<1>(move));
+                            }
+                        } else {
+                            // Deselect
+                            selected.reset();
+                            legal_dest.clear();
+                        }
+                    }
+                }
+                break;
+            }
+                
+            case InputEvent::NONE:
+                break;
+        }
+        
+        // Render
+        renderer.render_board(game, selected, legal_dest);
+        renderer.present();
+        
+        // Small delay to prevent CPU spinning
+        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
+    }
+    
+    // Show post-game screen if game ended normally
+    if (game.game_over && running) {
+        bool showing = true;
+        while (showing) {
+            int mouse_x = 0, mouse_y = 0;
+            InputEvent event = input.poll(mouse_x, mouse_y);
+            
+            if (event == InputEvent::QUIT) {
+                showing = false;
+            } else if (event == InputEvent::MOUSE_CLICK) {
+                // Check if clicked on "Back to Menu" button
+                auto [win_w, win_h] = renderer.get_window_size();
+                SDL_Rect button = {win_w / 2 - 100, win_h * 3 / 4, 200, 50};
+                if (mouse_x >= button.x && mouse_x < button.x + button.w &&
+                    mouse_y >= button.y && mouse_y < button.y + button.h) {
+                    showing = false;
+                }
+            }
+            
+            renderer.render_post_game(game);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    }
+    
+    std::cout << "Game Over! Winner: " << game.winner << std::endl;
+    std::cout << "Total moves: " << game.move_notations.size() << std::endl;
+}
+
+void run_ai_vs_player_game(Renderer& renderer, InputHandler& input, const AISettings& settings) {
+    // Create game
+    Game game;
+    
+    // Game state
+    std::optional<int> selected;
+    std::unordered_set<int> legal_dest;
+    
+    // Determine AI color
+    Color ai_color = (settings.player_side == "Gold") ? Color::SCARLET : Color::GOLD;
+    RandomAI ai(game, ai_color);
+    
+    std::cout << "Starting AI vs Player game. Player is " << settings.player_side << std::endl;
+    
+    // Main game loop
+    bool running = true;
+    while (running && !game.game_over) {
+        int mouse_x = 0, mouse_y = 0;
+        InputEvent event = input.poll(mouse_x, mouse_y);
+        
+        switch (event) {
+            case InputEvent::QUIT:
+                running = false;
+                break;
+                
+            case InputEvent::MOUSE_CLICK: {
+                if (game.current_turn == ai_color) {
+                    // Don't process clicks during AI turn
+                    break;
+                }
+                
+                // Convert screen to board coordinates
+                auto pos = renderer.screen_to_board(mouse_x, mouse_y);
+                if (pos.has_value()) {
+                    auto [layer, row, col] = pos.value();
+                    int idx = pos_to_index(layer, row, col);
+                    int16_t piece = game.board[idx];
+                    
+                    // Check if this is a valid piece for current player
+                    bool valid_piece = (game.current_turn == Color::GOLD && piece > 0) ||
+                                      (game.current_turn == Color::SCARLET && piece < 0);
+                    
+                    if (!selected.has_value()) {
+                        // Select piece
+                        if (valid_piece) {
+                            selected = idx;
+                            auto moves = game.get_legal_moves_for(idx);
+                            legal_dest.clear();
+                            for (const auto& move : moves) {
+                                legal_dest.insert(std::get<1>(move));
+                            }
+                        }
+                    } else {
+                        // Try to make a move
+                        if (legal_dest.count(idx) > 0) {
+                            // Find the matching move
+                            auto moves = game.get_legal_moves_for(selected.value());
+                            for (const auto& move : moves) {
+                                if (std::get<1>(move) == idx) {
+                                    game.make_move(move);
+                                    game.update();
+                                    selected.reset();
+                                    legal_dest.clear();
+                                    break;
+                                }
+                            }
+                        } else if (valid_piece) {
+                            // Select different piece
+                            selected = idx;
+                            auto moves = game.get_legal_moves_for(idx);
+                            legal_dest.clear();
+                            for (const auto& move : moves) {
+                                legal_dest.insert(std::get<1>(move));
+                            }
+                        } else {
+                            // Deselect
+                            selected.reset();
+                            legal_dest.clear();
+                        }
+                    }
+                }
+                break;
+            }
+                
+            case InputEvent::NONE:
+                break;
+        }
+        
+        // AI turn
+        if (game.current_turn == ai_color && !game.game_over) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            auto move = ai.choose_move();
+            if (move.has_value()) {
+                game.make_move(move.value());
+                game.update();
+                selected.reset();
+                legal_dest.clear();
+            }
+        }
+        
+        // Render
+        renderer.render_board(game, selected, legal_dest);
+        renderer.present();
+        
+        // Small delay to prevent CPU spinning
+        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
+    }
+    
+    // Show post-game screen if game ended normally
+    if (game.game_over && running) {
+        bool showing = true;
+        while (showing) {
+            int mouse_x = 0, mouse_y = 0;
+            InputEvent event = input.poll(mouse_x, mouse_y);
+            
+            if (event == InputEvent::QUIT) {
+                showing = false;
+            } else if (event == InputEvent::MOUSE_CLICK) {
+                // Check if clicked on "Back to Menu" button
+                auto [win_w, win_h] = renderer.get_window_size();
+                SDL_Rect button = {win_w / 2 - 100, win_h * 3 / 4, 200, 50};
+                if (mouse_x >= button.x && mouse_x < button.x + button.w &&
+                    mouse_y >= button.y && mouse_y < button.y + button.h) {
+                    showing = false;
+                }
+            }
+            
+            renderer.render_post_game(game);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    }
+    
+    std::cout << "Game Over! Winner: " << game.winner << std::endl;
+    std::cout << "Total moves: " << game.move_notations.size() << std::endl;
+}
+
+void run_ai_vs_ai_game(Renderer& renderer, InputHandler& input, const AISettings& settings) {
+    // Create game
+    Game game;
+    
+    // Create both AIs
+    RandomAI gold_ai(game, Color::GOLD);
+    RandomAI scarlet_ai(game, Color::SCARLET);
+    
+    std::cout << "Starting AI vs AI game" << std::endl;
+    
+    // Game state
+    std::optional<int> selected;
+    std::unordered_set<int> legal_dest;
+    
+    // Main game loop
+    bool running = true;
+    auto last_move_time = std::chrono::steady_clock::now();
+    
+    while (running && !game.game_over) {
+        int mouse_x = 0, mouse_y = 0;
+        InputEvent event = input.poll(mouse_x, mouse_y);
+        
+        if (event == InputEvent::QUIT) {
+            running = false;
+            break;
+        }
+        
+        // AI makes move every 500ms
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_move_time);
+        
+        if (elapsed.count() >= 500 && !game.game_over) {
+            auto move = (game.current_turn == Color::GOLD) ? gold_ai.choose_move() : scarlet_ai.choose_move();
+            if (move.has_value()) {
+                game.make_move(move.value());
+                game.update();
+                last_move_time = now;
+            }
+        }
+        
+        // Render
+        renderer.render_board(game, selected, legal_dest);
+        renderer.present();
+        
+        // Small delay
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    
+    // Show post-game screen
+    if (game.game_over && running) {
+        bool showing = true;
+        while (showing) {
+            int mouse_x = 0, mouse_y = 0;
+            InputEvent event = input.poll(mouse_x, mouse_y);
+            
+            if (event == InputEvent::QUIT) {
+                showing = false;
+            } else if (event == InputEvent::MOUSE_CLICK) {
+                auto [win_w, win_h] = renderer.get_window_size();
+                SDL_Rect button = {win_w / 2 - 100, win_h * 3 / 4, 200, 50};
+                if (mouse_x >= button.x && mouse_x < button.x + button.w &&
+                    mouse_y >= button.y && mouse_y < button.y + button.h) {
+                    showing = false;
+                }
+            }
+            
+            renderer.render_post_game(game);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    }
+    
+    std::cout << "Game Over! Winner: " << game.winner << std::endl;
+    std::cout << "Total moves: " << game.move_notations.size() << std::endl;
+}
+
+void run_tournament_mode(Renderer& renderer, InputHandler& input) {
+    std::cout << "Tournament mode not yet implemented" << std::endl;
+    // TODO: Implement tournament mode similar to Python's tournament.py
+    // - Multiple AI contestants
+    // - Round-robin or elimination format
+    // - Match statistics and leaderboard
+}
+
+void run_campaign_mode(Renderer& renderer, InputHandler& input) {
+    std::cout << "Campaign mode not yet implemented" << std::endl;
+    // TODO: Implement campaign mode similar to Python's campaign.py
+    // - Progressive AI difficulty
+    // - Player progression/unlocks
+    // - Save/load campaign state
+}
+    
+    return 0;
+}

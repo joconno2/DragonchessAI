@@ -1,2 +1,50 @@
-# Auto detect text files and perform LF normalization
+# Set default behavior to automatically normalize line endings
 * text=auto
+
+# C++ source files
+*.cpp text diff=cpp
+*.h text diff=cpp
+*.hpp text diff=cpp
+*.c text diff=cpp
+*.cc text diff=cpp
+*.cxx text diff=cpp
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# CMake files
+CMakeLists.txt text
+*.cmake text
+
+# Documentation
+*.md text diff=markdown
+*.txt text
+LICENSE text
+*.rst text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.otf binary
+
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+*.rar binary
+
+# Compiled binaries
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.o binary
+*.obj binary
