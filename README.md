@@ -1,5 +1,7 @@
 # Dragonchess: A High-Performance AI Framework for Three-Dimensional Chess Variants
 
+![Board Example](assets/board_example.png)
+
 ## Abstract
 
 Dragonchess is a complete implementation of Gary Gygax's three-dimensional chess variant, developed as a high-performance framework for artificial intelligence research and education. The system provides both a graphical user interface for human play and a headless computational mode capable of executing over 20,000 games per second on commodity hardware. The implementation includes a plugin architecture that enables students and researchers to develop custom AI agents with minimal boilerplate code while maintaining full access to the underlying game state and move generation systems.
