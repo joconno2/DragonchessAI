@@ -26,17 +26,6 @@ The system architecture separates game logic from presentation and provides mult
 
 **Rendering System**: The graphical interface uses SDL2 for cross-platform compatibility and renders all three board levels simultaneously with visual indicators for piece movement ranges, available captures, and check conditions. The rendering pipeline is decoupled from game logic allowing the same codebase to operate in both graphical and headless modes without modification.
 
-### Performance Characteristics
-
-The headless execution mode achieves the following performance benchmarks on a modern x86-64 processor:
-
-- Random vs Random agents: 20,000+ games per second
-- Greedy evaluation agents: 13,670 games per second  
-- Plugin-based agents: 1,000+ games per second
-- Minimax depth-2: Approximately 10 games per second
-- Alpha-beta depth-3: 2-5 games per second
-
-These performance figures enable rapid experimentation with AI algorithms and large-scale data collection for machine learning applications. The multi-threaded tournament system scales linearly with available processor cores, allowing researchers to leverage modern multi-core architectures effectively.
 
 ## Technical Implementation
 
@@ -90,17 +79,6 @@ extern "C" SimpleAI* create_ai(Game& game, Color color) {
 
 Plugins compile to shared libraries (.so files on Linux) and are loaded via dlopen/dlsym calls, allowing the main executable to remain unchanged while testing different AI implementations.
 
-## Educational Applications
-
-The system was designed specifically to support artificial intelligence education at the undergraduate and graduate levels. The plugin architecture enables several pedagogical applications:
-
-**Progressive Complexity**: Students can begin with simple evaluation-function-based agents (capturing high-value pieces, controlling the center) and progress to implementing minimax search, alpha-beta pruning, move ordering, transposition tables, and other advanced techniques. The provided example implementations demonstrate five levels of increasing sophistication from random play through tactical and positional evaluation.
-
-**Empirical Evaluation**: The headless tournament mode allows students to rigorously test their implementations against both baseline agents and peer submissions. Automated round-robin tournaments generate CSV data files containing game outcomes, move counts, and timing information suitable for statistical analysis.
-
-**Algorithmic Experimentation**: The high-dimensional state space (approximately 10^100 possible positions) and complex positional factors make Dragonchess resistant to brute-force approaches even at shallow search depths. This encourages students to implement sophisticated pruning strategies, evaluation function tuning, and domain-specific heuristics rather than relying solely on search depth.
-
-**Research Platform**: The performance characteristics enable applications beyond education including reinforcement learning (using self-play to train neural network evaluators), opening theory development (analyzing early game positions computationally), and endgame tablebase generation (exhaustively solving positions with few remaining pieces).
 
 ## Compilation and Deployment
 
@@ -151,33 +129,6 @@ The headless mode provides comprehensive control over execution parameters:
 
 **Execution Control**: Thread count can be specified manually or automatically detected. Maximum game length limits prevent runaway games in draw positions. Verbose mode provides detailed logging for debugging purposes.
 
-## Results and Analysis
-
-The example implementations provided with the system demonstrate measurable progression in playing strength. In automated tournaments with 100 games per matchup, the following win rates were observed:
-
-- Random agent: 4.2% (baseline)
-- Material-maximizing agent: 41.3% (focusing on captures and central control)
-- Tactical agent: 40.5% (recognizing immediate threats and opportunities)
-- Positional agent: 37.8% (balancing development, king safety, and coordination)
-- Aggressive agent: 36.7% (prioritizing attacks over defensive considerations)
-
-The built-in greedy agent achieved 44.6% overall, establishing a benchmark for student implementations to exceed. Notably, matchups between similarly-sophisticated agents often resulted in draws (approaching 60% draw rates), suggesting that defensive play is favored in Dragonchess and that effective AI requires deeper search or superior evaluation rather than simple tactical awareness.
-
-The aggressive agent demonstrated domain-specific success: while achieving only 28 wins against the greedy agent in 100 games, it went completely undefeated (92 wins, 0 losses, 8 draws) against the random baseline. This suggests that playing style can be tuned for specific opponents, an insight valuable for teaching game-theoretic concepts.
-
-## Future Directions
-
-Several extensions to the current implementation would enhance both its research utility and educational value:
-
-**Neural Network Integration**: Implementing an evaluation function based on deep learning would enable comparison between traditional hand-crafted heuristics and learned representations. The plugin architecture could be extended to support neural network inference engines.
-
-**Opening Book**: Systematic analysis of early-game positions could produce an opening database similar to those used in chess engines, reducing the search burden in well-studied positions and potentially altering the balance between aggressive and defensive strategies.
-
-**Endgame Tablebases**: Positions with few remaining pieces could be solved exhaustively and stored in compressed lookup tables, guaranteeing optimal play in simplified positions and providing ground truth for evaluating heuristic approaches.
-
-**Enhanced UI**: The current graphical interface could be extended with move history visualization, position analysis tools, and integration with the AI explanation systems to help human players understand why the computer chose particular moves.
-
-**Network Play**: Implementing a client-server architecture would enable human-versus-human games across networks and facilitate online tournaments for educational cohorts.
 
 ## Conclusion
 
