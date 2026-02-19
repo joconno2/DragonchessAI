@@ -2,17 +2,17 @@
 
 ![Board Example](assets/board_example.png)
 
-## Abstract
+## Abstract ![icon](assets/scarlet_dragon.png)
 
 Dragonchess is a complete implementation of Gary Gygax's three-dimensional chess variant, developed as a high-performance framework for artificial intelligence research and education. The system provides both a graphical user interface for human play and a headless computational mode capable of executing over 20,000 games per second on commodity hardware. The implementation includes a plugin architecture that enables students and researchers to develop custom AI agents with minimal boilerplate code while maintaining full access to the underlying game state and move generation systems.
 
-## Overview
+## Overview ![icon](assets/gold_hero.png)
 
 Dragonchess extends traditional chess into three spatial dimensions with 192 squares arranged across three boards representing different vertical levels. The game introduces 15 distinct piece types with unique movement patterns including inter-level transitions and ranged attacks across vertical space. This complexity makes Dragonchess an excellent testbed for artificial intelligence algorithms, particularly those dealing with high-dimensional state spaces and complex positional evaluation.
 
 This implementation was developed from the ground up in C++17, beginning as a Python prototype before being completely rewritten for performance. The current system achieves computational throughput suitable for large-scale reinforcement learning experiments, hyperparameter optimization, and tournament-style AI evaluation.
 
-## Architecture
+## Architecture ![icon](assets/scarlet_basilisk.png)
 
 ### Core Components
 
@@ -29,7 +29,7 @@ The system architecture separates game logic from presentation and provides mult
 **Rendering System**: The graphical interface uses SDL2 for cross-platform compatibility and renders all three board levels simultaneously with visual indicators for piece movement ranges, available captures, and check conditions. The rendering pipeline is decoupled from game logic allowing the same codebase to operate in both graphical and headless modes without modification.
 
 
-## Technical Implementation
+## Technical Implementation ![icon](assets/gold_mage.png)
 
 ### Board Representation
 
@@ -82,7 +82,7 @@ extern "C" SimpleAI* create_ai(Game& game, Color color) {
 Plugins compile to shared libraries (.so files on Linux) and are loaded via dlopen/dlsym calls, allowing the main executable to remain unchanged while testing different AI implementations.
 
 
-## Compilation and Deployment
+## Compilation and Deployment ![icon](assets/scarlet_oliphant.png)
 
 ### Build Requirements
 
@@ -119,7 +119,7 @@ The resulting shared library can be loaded at runtime using command-line options
 
 This workflow minimizes the build complexity for students while maintaining access to the full game engine functionality.
 
-## Command-Line Interface
+## Command-Line Interface ![icon](assets/gold_sylph.png)
 
 The headless mode provides comprehensive control over execution parameters:
 
@@ -132,7 +132,7 @@ The headless mode provides comprehensive control over execution parameters:
 **Execution Control**: Thread count can be specified manually or automatically detected. Maximum game length limits prevent runaway games in draw positions. Verbose mode provides detailed logging for debugging purposes.
 
 
-## Conclusion
+## Conclusion ![icon](assets/scarlet_elemental.png)
 
 This implementation of Dragonchess provides a complete framework for artificial intelligence research and education in the domain of complex board games. The combination of high computational performance, flexible plugin architecture, and comprehensive documentation enables applications ranging from undergraduate AI courses through advanced reinforcement learning research. The open architecture invites extension and modification while the included example implementations provide clear reference points for developers at all skill levels.
 
@@ -166,18 +166,18 @@ dragonchess/
 └── README.md                # This document
 ```
 
-## Additional Documentation
+## Additional Documentation ![icon](assets/gold_hero.png)
 
 - **HEADLESS_MODE.md**: Comprehensive guide to headless execution, CLI options, and batch processing
 - **PLUGIN_SYSTEM.md**: Technical documentation for the plugin architecture and API reference
 - **STUDENT_GUIDE.md**: Tutorial for developing AI agents with progressive examples
 - **examples/README.md**: Detailed description of provided example implementations and tournament results
 
-## License
+## License ![icon](assets/scarlet_dwarf.png)
 
 This software is provided for educational and research purposes. Users are free to modify, extend, and redistribute the code with attribution. No warranty is provided for correctness, performance, or fitness for any particular purpose.
 
-## References
+## References ![icon](assets/gold_warrior.png)
 
 Gygax, G. (1985). *Dragonchess*. TSR, Inc.
 
