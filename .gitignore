@@ -49,6 +49,12 @@ __pycache__/
 !CMakeLists.txt
 !examples/tournament_results/.gitkeep
 
+# Research branch: allow experiment results and figures
+!results/
+!results/**
+!figures/
+!figures/**
+
 # Tournament results (generated data)
 examples/tournament_results/*.csv
 examples/tournament_results/*.txt
