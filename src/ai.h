@@ -39,7 +39,7 @@ protected:
         2.0f     // GRIFFIN
     };
     
-    float evaluate_material() const;
+    virtual float evaluate_material(const Game& g) const;
 };
 
 class RandomAI : public BaseAI {
@@ -115,8 +115,24 @@ private:
     };
     
     float evaluate_position() const;
-    uint64_t hash_position() const;
+    uint64_t hash_position(const Game& g) const;
     EvalResult alphabeta(Game& game_copy, int depth, float alpha, float beta, bool maximizing);
+};
+
+// AlphaBeta AI with externally supplied piece-value weights.
+// Weights vector has 14 entries (piece types 1-15, excluding King at index 10).
+// Piece type order: Sylph(1), Griffin(2), Dragon(3), Oliphant(4), Unicorn(5),
+//   Hero(6), Thief(7), Cleric(8), Mage(9), Paladin(11), Warrior(12),
+//   Basilisk(13), Elemental(14), Dwarf(15).
+// King value is fixed at 10000 internally.
+class EvolvableAI : public AlphaBetaAI {
+public:
+    EvolvableAI(Game& game, Color color, const std::vector<float>& weights, int depth = 2);
+
+    float evaluate_material(const Game& g) const override;
+
+private:
+    std::vector<float> weights;  // 14 evolved piece values
 };
 
 } // namespace dragonchess

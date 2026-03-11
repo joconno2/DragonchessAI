@@ -3,29 +3,31 @@
 #include <iomanip>
 #include <algorithm>
 #include <unordered_map>
-#include <functional>
+#include <cstdint>
 
 namespace dragonchess {
 
-// Map piece types to their move generators
+// Direct array indexed by absolute piece type [0..15]; 0 = EMPTY (nullptr).
+// Eliminates hash-table overhead in get_all_moves (called at every search node).
 using MoveGenerator = std::vector<Move>(*)(const Position&, const Board&, Color);
 
-static const std::unordered_map<int, MoveGenerator> move_generators = {
-    {1, generate_sylph_moves},
-    {2, generate_griffin_moves},
-    {3, generate_dragon_moves},
-    {4, generate_oliphant_moves},
-    {5, generate_unicorn_moves},
-    {6, generate_hero_moves},
-    {7, generate_thief_moves},
-    {8, generate_cleric_moves},
-    {9, generate_mage_moves},
-    {10, generate_king_moves},
-    {11, generate_paladin_moves},
-    {12, generate_warrior_moves},
-    {13, generate_basilisk_moves},
-    {14, generate_elemental_moves},
-    {15, generate_dwarf_moves}
+static const MoveGenerator move_gen_table[16] = {
+    nullptr,                  // 0 = EMPTY
+    generate_sylph_moves,     // 1
+    generate_griffin_moves,   // 2
+    generate_dragon_moves,    // 3
+    generate_oliphant_moves,  // 4
+    generate_unicorn_moves,   // 5
+    generate_hero_moves,      // 6
+    generate_thief_moves,     // 7
+    generate_cleric_moves,    // 8
+    generate_mage_moves,      // 9
+    generate_king_moves,      // 10
+    generate_paladin_moves,   // 11
+    generate_warrior_moves,   // 12
+    generate_basilisk_moves,  // 13
+    generate_elemental_moves, // 14
+    generate_dwarf_moves,     // 15
 };
 
 Game::Game() 
@@ -56,12 +58,13 @@ std::vector<Move> Game::get_all_moves() const {
         
         // Get piece type
         int abs_code = std::abs(piece);
-        auto it = move_generators.find(abs_code);
-        if (it == move_generators.end()) continue;
-        
+        if (abs_code < 1 || abs_code > 15) continue;
+        MoveGenerator gen = move_gen_table[abs_code];
+        if (!gen) continue;
+
         // Generate moves for this piece
         Position pos = index_to_pos(idx);
-        std::vector<Move> candidate_moves = it->second(pos, board, current_turn);
+        std::vector<Move> candidate_moves = gen(pos, board, current_turn);
         
         // Validate moves
         for (const auto& move : candidate_moves) {
@@ -259,15 +262,11 @@ void Game::update() {
     
     // Check for threefold repetition (or more)
     if (state_history.size() >= 3) {
-        std::string current_state = state_history.back();
+        uint64_t current_state = state_history.back();
         int repetition_count = 0;
-        
-        for (const auto& state : state_history) {
-            if (state == current_state) {
-                repetition_count++;
-            }
+        for (uint64_t h : state_history) {
+            if (h == current_state) repetition_count++;
         }
-        
         if (repetition_count >= 3) {
             game_over = true;
             winner = "Draw";
@@ -321,25 +320,21 @@ std::string Game::index_to_algebraic(int idx) const {
     return oss.str();
 }
 
-std::string Game::board_state_hash() const {
-    // Compute hash of board state + turn using std::hash
-    std::size_t hash = 0;
-    
-    // Hash combine function
-    auto hash_combine = [](std::size_t& seed, std::size_t value) {
-        seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    };
-    
-    for (int16_t piece : board) {
-        hash_combine(hash, static_cast<std::size_t>(piece));
+uint64_t Game::board_state_hash() const {
+    // Fast 64-bit hash of board + turn for repetition detection.
+    // Uses the same Zobrist-style accumulation as the AlphaBeta TT hash.
+    uint64_t hash = 0;
+    for (int i = 0; i < TOTAL_SQUARES; ++i) {
+        int16_t piece = board[i];
+        if (piece != EMPTY) {
+            // Interleave square index and piece value for collision resistance
+            uint64_t v = (static_cast<uint64_t>(static_cast<uint16_t>(piece)) << 10) | i;
+            hash ^= v * 0x9e3779b97f4a7c15ULL;  // Fibonacci hashing
+            hash = (hash << 13) | (hash >> 51);  // Rotation mix
+        }
     }
-    
-    hash_combine(hash, current_turn == Color::GOLD ? 1 : 0);
-    
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0') << std::setw(16) << hash;
-    
-    return oss.str();
+    hash ^= (current_turn == Color::GOLD) ? 0xDEADBEEFCAFEBABEULL : 0;
+    return hash;
 }
 
 } // namespace dragonchess

@@ -9,10 +9,11 @@
 namespace dragonchess {
 
 struct AIConfig {
-    std::string type;  // "random", "greedy", "greedyvalue", "minimax", "alphabeta", "plugin"
-    int depth = 2;     // For minimax/alphabeta
+    std::string type;  // "random", "greedy", "greedyvalue", "minimax", "alphabeta", "plugin", "evolvable"
+    int depth = 2;     // For minimax/alphabeta/evolvable
     std::string name;  // Optional custom name
     std::string plugin_path;  // Path to .so file for plugin type
+    std::vector<float> weights;  // For evolvable: 14 piece-value weights (no King)
 };
 
 struct MatchResult {
