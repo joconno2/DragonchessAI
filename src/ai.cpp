@@ -4,6 +4,22 @@
 #include <algorithm>
 #include <cmath>
 
+// Zobrist hash table for AlphaBeta transposition table.
+// Initialized once at program startup with a fixed seed (reproducible).
+// Layout: [square][piece_type][color]  — color 0=gold(+), 1=scarlet(-)
+namespace {
+    struct ZobristTable {
+        uint64_t data[288][16][2];
+        ZobristTable() {
+            std::mt19937_64 rng(0xD4A6C0FFEE1234ULL);
+            for (int sq = 0; sq < 288; ++sq)
+                for (int pt = 1; pt < 16; ++pt)
+                    for (int c = 0; c < 2; ++c)
+                        data[sq][pt][c] = rng();
+        }
+    } const kZobrist;
+} // anonymous namespace
+
 namespace dragonchess {
 
 BaseAI::BaseAI(Game& game, Color color)
@@ -12,17 +28,17 @@ BaseAI::BaseAI(Game& game, Color color)
 {
 }
 
-float BaseAI::evaluate_material() const {
+float BaseAI::evaluate_material(const Game& g) const {
     float score = 0.0f;
-    
+
     for (int i = 0; i < TOTAL_SQUARES; ++i) {
-        int16_t piece = game.board[i];
+        int16_t piece = g.board[i];
         if (piece != EMPTY) {
             int abs_piece = std::abs(piece);
             float value = piece_values[abs_piece];
-            
+
             // Positive for our pieces, negative for opponent
-            if ((piece > 0 && color == Color::GOLD) || 
+            if ((piece > 0 && color == Color::GOLD) ||
                 (piece < 0 && color == Color::SCARLET)) {
                 score += value;
             } else {
@@ -30,20 +46,9 @@ float BaseAI::evaluate_material() const {
             }
         }
     }
-    
-    // Penalize positions that appear in state history (avoid repetition)
-    if (game.state_history.size() > 0) {
-        std::string current_hash = game.board_state_hash();
-        int repetition_count = 0;
-        for (const auto& state : game.state_history) {
-            if (state == current_hash) {
-                repetition_count++;
-            }
-        }
-        // Heavy penalty for repeated positions
-        score -= repetition_count * 50.0f;
-    }
-    
+
+    // Note: repetition draws enforced by Game::update() via threefold-repetition check.
+    // No O(N) scan needed here at every leaf node.
     return score;
 }
 
@@ -173,7 +178,7 @@ MinimaxAI::MinimaxAI(Game& game, Color color, int depth)
 }
 
 float MinimaxAI::evaluate_position() const {
-    return evaluate_material();
+    return evaluate_material(game);
 }
 
 MinimaxAI::EvalResult MinimaxAI::minimax(Game& game_copy, int depth, bool maximizing) {
@@ -182,9 +187,9 @@ MinimaxAI::EvalResult MinimaxAI::minimax(Game& game_copy, int depth, bool maximi
     
     // Terminal condition
     if (depth == 0 || moves.empty() || game_copy.game_over) {
-        return {evaluate_material(), std::nullopt};
+        return {evaluate_material(game_copy), std::nullopt};
     }
-    
+
     // Limit branching factor at deeper levels for speed
     size_t max_moves = (depth <= 1) ? moves.size() : std::min(moves.size(), size_t(25));
     
@@ -299,15 +304,15 @@ AlphaBetaAI::AlphaBetaAI(Game& game, Color color, int depth)
 }
 
 float AlphaBetaAI::evaluate_position() const {
-    return evaluate_material();
+    return evaluate_material(game);
 }
 
-uint64_t AlphaBetaAI::hash_position() const {
-    // Simple hash - just XOR all pieces with their positions
+uint64_t AlphaBetaAI::hash_position(const Game& g) const {
     uint64_t hash = 0;
     for (int i = 0; i < TOTAL_SQUARES; ++i) {
-        if (game.board[i] != EMPTY) {
-            hash ^= (static_cast<uint64_t>(game.board[i]) << i);
+        int16_t piece = g.board[i];
+        if (piece != EMPTY) {
+            hash ^= kZobrist.data[i][std::abs(piece)][piece < 0 ? 1 : 0];
         }
     }
     return hash;
@@ -318,17 +323,17 @@ AlphaBetaAI::EvalResult AlphaBetaAI::alphabeta(Game& game_copy, int depth,
     nodes_searched++;
     
     // Check transposition table
-    uint64_t hash = hash_position();
+    uint64_t hash = hash_position(game_copy);
     auto it = transposition_table.find(hash);
     if (it != transposition_table.end() && it->second.second >= depth) {
         return {it->second.first, std::nullopt};
     }
-    
+
     std::vector<Move> moves = game_copy.get_all_moves();
-    
+
     // Terminal condition
     if (depth == 0 || moves.empty() || game_copy.game_over) {
-        float score = evaluate_material();
+        float score = evaluate_material(game_copy);
         transposition_table[hash] = {score, depth};
         return {score, std::nullopt};
     }
@@ -363,73 +368,67 @@ AlphaBetaAI::EvalResult AlphaBetaAI::alphabeta(Game& game_copy, int depth,
     if (maximizing) {
         float best_score = -std::numeric_limits<float>::infinity();
         std::optional<Move> best_move;
-        std::vector<Move> best_moves;  // Track all moves with best score
-        
+        std::vector<Move> best_moves;
+
         for (size_t i = 0; i < max_moves; ++i) {
             const auto& move = moves[i];
-            Game child = game_copy;
-            child.make_move(move);
-            child.update();
-            
-            auto result = alphabeta(child, depth - 1, alpha, beta, false);
-            
+            game_copy.make_move(move);   // make/unmake: no Game copy needed
+            game_copy.update();
+
+            auto result = alphabeta(game_copy, depth - 1, alpha, beta, false);
+
+            game_copy.undo_move();       // restore board state
+
             if (result.score > best_score) {
                 best_score = result.score;
                 best_moves.clear();
                 best_moves.push_back(move);
             } else if (std::abs(result.score - best_score) < 0.01f) {
-                // Same score - add to candidates for random selection
                 best_moves.push_back(move);
             }
-            
+
             alpha = std::max(alpha, best_score);
-            if (beta <= alpha) {
-                break;  // Beta cutoff
-            }
+            if (beta <= alpha) break;  // Beta cutoff
         }
-        
-        // Randomly select from best moves to break ties
+
         if (!best_moves.empty()) {
             std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
             best_move = best_moves[dist(rng)];
         }
-        
+
         transposition_table[hash] = {best_score, depth};
         return {best_score, best_move};
     } else {
         float best_score = std::numeric_limits<float>::infinity();
         std::optional<Move> best_move;
-        std::vector<Move> best_moves;  // Track all moves with best score
-        
+        std::vector<Move> best_moves;
+
         for (size_t i = 0; i < max_moves; ++i) {
             const auto& move = moves[i];
-            Game child = game_copy;
-            child.make_move(move);
-            child.update();
-            
-            auto result = alphabeta(child, depth - 1, alpha, beta, true);
-            
+            game_copy.make_move(move);   // make/unmake: no Game copy needed
+            game_copy.update();
+
+            auto result = alphabeta(game_copy, depth - 1, alpha, beta, true);
+
+            game_copy.undo_move();       // restore board state
+
             if (result.score < best_score) {
                 best_score = result.score;
                 best_moves.clear();
                 best_moves.push_back(move);
             } else if (std::abs(result.score - best_score) < 0.01f) {
-                // Same score - add to candidates for random selection
                 best_moves.push_back(move);
             }
-            
+
             beta = std::min(beta, best_score);
-            if (beta <= alpha) {
-                break;  // Alpha cutoff
-            }
+            if (beta <= alpha) break;  // Alpha cutoff
         }
-        
-        // Randomly select from best moves to break ties
+
         if (!best_moves.empty()) {
             std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
             best_move = best_moves[dist(rng)];
         }
-        
+
         transposition_table[hash] = {best_score, depth};
         return {best_score, best_move};
     }
@@ -455,6 +454,42 @@ std::optional<Move> AlphaBetaAI::choose_move() {
     // std::cout << "AlphaBeta searched " << nodes_searched << " nodes, cache size: " << transposition_table.size() << std::endl;
     
     return result.move.has_value() ? result.move : moves[0];
+}
+
+// ===== EvolvableAI =====
+// Piece type -> weight index (King excluded, fixed at 10000):
+//   1=Sylph→0, 2=Griffin→1, 3=Dragon→2, 4=Oliphant→3, 5=Unicorn→4,
+//   6=Hero→5, 7=Thief→6, 8=Cleric→7, 9=Mage→8, 10=King(fixed),
+//   11=Paladin→9, 12=Warrior→10, 13=Basilisk→11, 14=Elemental→12, 15=Dwarf→13
+static const int PIECE_TO_WEIGHT_IDX[16] = {
+    -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, 9, 10, 11, 12, 13
+};
+
+EvolvableAI::EvolvableAI(Game& game, Color color, const std::vector<float>& weights, int depth)
+    : AlphaBetaAI(game, color, depth)
+    , weights(weights)
+{
+}
+
+float EvolvableAI::evaluate_material(const Game& g) const {
+    float score = 0.0f;
+    for (int i = 0; i < TOTAL_SQUARES; ++i) {
+        int16_t piece = g.board[i];
+        if (piece == EMPTY) continue;
+        int abs_piece = std::abs(piece);
+        float value;
+        if (abs_piece == 10) {
+            value = 10000.0f;  // King always fixed
+        } else {
+            int idx = PIECE_TO_WEIGHT_IDX[abs_piece];
+            value = (idx >= 0 && idx < (int)weights.size()) ? weights[idx] : 0.0f;
+        }
+        if ((piece > 0 && color == Color::GOLD) || (piece < 0 && color == Color::SCARLET))
+            score += value;
+        else
+            score -= value;
+    }
+    return score;
 }
 
 } // namespace dragonchess

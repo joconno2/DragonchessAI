@@ -49,6 +49,8 @@ std::unique_ptr<BaseAI> create_ai(const AIConfig& config, Game& game, Color colo
         return std::make_unique<MinimaxAI>(game, color, config.depth);
     } else if (type_lower == "alphabeta") {
         return std::make_unique<AlphaBetaAI>(game, color, config.depth);
+    } else if (type_lower == "evolvable") {
+        return std::make_unique<EvolvableAI>(game, color, config.weights, config.depth);
     } else {
         std::cerr << "Unknown AI type: " << config.type << ", defaulting to RandomAI" << std::endl;
         return std::make_unique<RandomAI>(game, color);
@@ -286,44 +288,51 @@ void export_results_csv(const TournamentResults& results, const std::string& fil
     std::cout << "Results exported to " << filename << std::endl;
 }
 
+static void write_results_json(std::ostream& out, const TournamentResults& results) {
+    out << "{\n";
+    out << "  \"summary\": {\n";
+    out << "    \"total_games\": " << results.total_games << ",\n";
+    out << "    \"gold_wins\": " << results.gold_wins << ",\n";
+    out << "    \"scarlet_wins\": " << results.scarlet_wins << ",\n";
+    out << "    \"draws\": " << results.draws << ",\n";
+    out << "    \"avg_game_length\": " << std::fixed << std::setprecision(2) << results.avg_game_length << ",\n";
+    out << "    \"total_time_ms\": " << std::fixed << std::setprecision(2) << results.total_time_ms << ",\n";
+    out << "    \"avg_time_per_game_ms\": " << std::fixed << std::setprecision(2)
+        << (results.total_time_ms / results.total_games) << "\n";
+    out << "  },\n";
+    out << "  \"matches\": [\n";
+
+    for (size_t i = 0; i < results.matches.size(); ++i) {
+        const auto& m = results.matches[i];
+        out << "    {\n";
+        out << "      \"game_id\": " << i << ",\n";
+        out << "      \"gold_ai\": \"" << m.gold_ai << "\",\n";
+        out << "      \"scarlet_ai\": \"" << m.scarlet_ai << "\",\n";
+        out << "      \"winner\": \"" << m.winner << "\",\n";
+        out << "      \"moves\": " << m.total_moves << ",\n";
+        out << "      \"duration_ms\": " << std::fixed << std::setprecision(3) << m.duration_ms << ",\n";
+        out << "      \"gold_pieces_remaining\": " << m.gold_pieces_remaining << ",\n";
+        out << "      \"scarlet_pieces_remaining\": " << m.scarlet_pieces_remaining << ",\n";
+        out << "      \"checkmate\": " << (m.is_checkmate ? "true" : "false") << "\n";
+        out << "    }" << (i < results.matches.size() - 1 ? "," : "") << "\n";
+    }
+
+    out << "  ]\n";
+    out << "}\n";
+}
+
 void export_results_json(const TournamentResults& results, const std::string& filename) {
+    // Special value "-" writes to stdout (used by training scripts to avoid temp files)
+    if (filename == "-") {
+        write_results_json(std::cout, results);
+        return;
+    }
     std::ofstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Failed to open " << filename << " for writing" << std::endl;
         return;
     }
-    
-    file << "{\n";
-    file << "  \"summary\": {\n";
-    file << "    \"total_games\": " << results.total_games << ",\n";
-    file << "    \"gold_wins\": " << results.gold_wins << ",\n";
-    file << "    \"scarlet_wins\": " << results.scarlet_wins << ",\n";
-    file << "    \"draws\": " << results.draws << ",\n";
-    file << "    \"avg_game_length\": " << std::fixed << std::setprecision(2) << results.avg_game_length << ",\n";
-    file << "    \"total_time_ms\": " << std::fixed << std::setprecision(2) << results.total_time_ms << ",\n";
-    file << "    \"avg_time_per_game_ms\": " << std::fixed << std::setprecision(2) 
-         << (results.total_time_ms / results.total_games) << "\n";
-    file << "  },\n";
-    file << "  \"matches\": [\n";
-    
-    for (size_t i = 0; i < results.matches.size(); ++i) {
-        const auto& m = results.matches[i];
-        file << "    {\n";
-        file << "      \"game_id\": " << i << ",\n";
-        file << "      \"gold_ai\": \"" << m.gold_ai << "\",\n";
-        file << "      \"scarlet_ai\": \"" << m.scarlet_ai << "\",\n";
-        file << "      \"winner\": \"" << m.winner << "\",\n";
-        file << "      \"moves\": " << m.total_moves << ",\n";
-        file << "      \"duration_ms\": " << std::fixed << std::setprecision(3) << m.duration_ms << ",\n";
-        file << "      \"gold_pieces_remaining\": " << m.gold_pieces_remaining << ",\n";
-        file << "      \"scarlet_pieces_remaining\": " << m.scarlet_pieces_remaining << ",\n";
-        file << "      \"checkmate\": " << (m.is_checkmate ? "true" : "false") << "\n";
-        file << "    }" << (i < results.matches.size() - 1 ? "," : "") << "\n";
-    }
-    
-    file << "  ]\n";
-    file << "}\n";
-    
+    write_results_json(file, results);
     file.close();
     std::cout << "Results exported to " << filename << std::endl;
 }

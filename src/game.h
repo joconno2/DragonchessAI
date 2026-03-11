@@ -7,6 +7,7 @@
 #include <array>
 #include <unordered_set>
 #include <optional>
+#include <cstdint>
 
 namespace dragonchess {
 
@@ -42,12 +43,12 @@ public:
     char piece_letter(int16_t piece) const;
     
     // Compute board state hash for repetition detection
-    std::string board_state_hash() const;
+    uint64_t board_state_hash() const;
     
     // Public members for game state
     Board board;
     Color current_turn;
-    std::vector<std::string> state_history;
+    std::vector<uint64_t> state_history;
     std::vector<Move> game_log;
     std::vector<std::string> move_notations;
     std::optional<Move> last_move;  // Track last move for highlighting

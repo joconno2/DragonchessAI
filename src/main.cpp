@@ -14,6 +14,7 @@
 #include <chrono>
 #include <memory>
 #include <cstring>
+#include <sstream>
 
 using namespace dragonchess;
 
@@ -560,6 +561,20 @@ int run_headless_mode(int argc, char* argv[]) {
         } else if (arg == "--scarlet-ai-plugin" && i + 1 < argc) {
             scarlet_config.type = "plugin";
             scarlet_config.plugin_path = argv[++i];
+        } else if (arg == "--gold-weights" && i + 1 < argc) {
+            gold_config.type = "evolvable";
+            std::string ws = argv[++i];
+            std::stringstream ss(ws);
+            std::string token;
+            while (std::getline(ss, token, ','))
+                gold_config.weights.push_back(std::stof(token));
+        } else if (arg == "--scarlet-weights" && i + 1 < argc) {
+            scarlet_config.type = "evolvable";
+            std::string ws = argv[++i];
+            std::stringstream ss(ws);
+            std::string token;
+            while (std::getline(ss, token, ','))
+                scarlet_config.weights.push_back(std::stof(token));
         } else if (arg == "--output-csv" && i + 1 < argc) {
             output_csv = argv[++i];
         } else if (arg == "--output-json" && i + 1 < argc) {
