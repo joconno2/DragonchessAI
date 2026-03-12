@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import os
+import posixpath
 import shlex
 import shutil
 import socket
@@ -23,7 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 from cluster.worker_config import WorkerSpec, default_remote_repo_dir, load_workers_csv
 
 
-EXCLUDE_DIRS = {
+LOCAL_EXCLUDE_DIRS = {
     ".git",
     ".cursor",
     ".pytest_cache",
@@ -39,7 +40,7 @@ EXCLUDE_GLOBS = {"*.pyc", "*.pyo", "*.o", "*.so", "*.a", "*.tmp"}
 
 
 def should_skip(name: str) -> bool:
-    if name in EXCLUDE_DIRS:
+    if name in LOCAL_EXCLUDE_DIRS:
         return True
     return any(fnmatch.fnmatch(name, pattern) for pattern in EXCLUDE_GLOBS)
 
@@ -56,12 +57,12 @@ def resolve_remote_repo_dir(sftp: paramiko.SFTPClient, repo_dir: str) -> str:
     return repo_dir
 
 
-def sftp_mkdir_p(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
-    parts = [part for part in remote_dir.split("/") if part]
-    prefix = "/" if remote_dir.startswith("/") else ""
-    current = prefix.rstrip("/")
-    for part in parts:
-        current = f"{current}/{part}" if current else f"/{part}" if prefix else part
+def sftp_mkdir_relative(sftp: paramiko.SFTPClient, base_dir: str, relative_dir: str) -> None:
+    current = base_dir.rstrip("/")
+    if not relative_dir:
+        return
+    for part in [part for part in relative_dir.split("/") if part]:
+        current = f"{current}/{part}"
         try:
             sftp.stat(current)
         except FileNotFoundError:
@@ -74,7 +75,7 @@ def copy_repo_to_sftp(sftp: paramiko.SFTPClient, local_root: Path, remote_root: 
         rel_path = os.path.relpath(root, local_root)
         rel_posix = "" if rel_path == "." else rel_path.replace(os.sep, "/")
         remote_dir = remote_root if not rel_posix else f"{remote_root}/{rel_posix}"
-        sftp_mkdir_p(sftp, remote_dir)
+        sftp_mkdir_relative(sftp, remote_root, rel_posix)
 
         for file_name in files:
             if should_skip(file_name):
@@ -82,6 +83,19 @@ def copy_repo_to_sftp(sftp: paramiko.SFTPClient, local_root: Path, remote_root: 
             local_path = Path(root) / file_name
             remote_path = f"{remote_dir}/{file_name}"
             sftp.put(str(local_path), remote_path)
+
+
+def copy_binary_to_sftp(
+    sftp: paramiko.SFTPClient,
+    local_binary_path: Path,
+    remote_root: str,
+) -> str:
+    remote_build_dir = posixpath.join(remote_root, "build")
+    sftp_mkdir_relative(sftp, remote_root, "build")
+    remote_binary_path = posixpath.join(remote_build_dir, "dragonchess")
+    sftp.put(str(local_binary_path), remote_binary_path)
+    sftp.chmod(remote_binary_path, 0o755)
+    return remote_binary_path
 
 
 def copy_repo_local(local_root: Path, destination_root: Path) -> None:
@@ -118,6 +132,12 @@ def run_remote(ssh: paramiko.SSHClient, command: str) -> tuple[int, str, str]:
     return code, out, err
 
 
+def ensure_remote_repo_dir(ssh: paramiko.SSHClient, repo_dir: str) -> None:
+    code, out, err = run_remote(ssh, f"mkdir -p {shlex.quote(repo_dir)}")
+    if code != 0:
+        raise RuntimeError((err or out).strip() or f"failed to create {repo_dir}")
+
+
 def connect_ssh(worker: WorkerSpec, timeout: int) -> paramiko.SSHClient:
     worker.require_remote_credentials()
     ssh = paramiko.SSHClient()
@@ -135,19 +155,26 @@ def connect_ssh(worker: WorkerSpec, timeout: int) -> paramiko.SSHClient:
     return ssh
 
 
-def build_commands(repo_dir: str, *, install_python_deps: bool, clean_build: bool) -> list[str]:
-    commands: list[str] = []
-    if clean_build:
-        commands.append(f"rm -rf {shlex.quote(repo_dir)}/build")
-    if install_python_deps:
-        commands.append(
-            f"python3 -m pip install --user -r {shlex.quote(repo_dir)}/requirements-cluster.txt"
-        )
-    commands.append(
-        f"cmake -S {shlex.quote(repo_dir)} -B {shlex.quote(repo_dir)}/build "
+def build_local_binary(binary_path: Path, *, clean_build: bool) -> None:
+    build_dir = binary_path.parent
+    if clean_build and build_dir.exists():
+        shutil.rmtree(build_dir)
+
+    build_dir.parent.mkdir(parents=True, exist_ok=True)
+    configure_cmd = (
+        f"cmake -S {shlex.quote(str(REPO_ROOT))} "
+        f"-B {shlex.quote(str(build_dir))} "
         "-DCMAKE_BUILD_TYPE=Release -DHEADLESS_ONLY=ON"
     )
-    commands.append(f"cmake --build {shlex.quote(repo_dir)}/build --parallel")
+    build_cmd = f"cmake --build {shlex.quote(str(build_dir))} --parallel"
+    run_local(configure_cmd, cwd=str(REPO_ROOT))
+    run_local(build_cmd, cwd=str(REPO_ROOT))
+
+
+def worker_runtime_commands(repo_dir: str, *, install_python_deps: bool) -> list[str]:
+    commands: list[str] = []
+    if install_python_deps:
+        commands.append("python3 -m pip install --user ray")
     return commands
 
 
@@ -156,41 +183,45 @@ def sync_worker(
     *,
     local_repo_root: Path,
     remote_repo_dir: str,
-    build_after_sync: bool,
+    local_binary_path: Path,
     install_python_deps: bool,
-    clean_build: bool,
     timeout: int,
 ) -> str:
     label = worker.display_name
     if worker.is_local:
         target_dir = Path(os.path.expanduser(remote_repo_dir)).resolve()
         copy_repo_local(local_repo_root, target_dir)
-        if build_after_sync:
-            for command in build_commands(
-                str(target_dir),
-                install_python_deps=install_python_deps,
-                clean_build=clean_build,
-            ):
-                run_local(worker.command_with_env(command), cwd=str(target_dir))
-        return f"{label}: synced locally to {target_dir}"
+        build_dir = target_dir / "build"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_binary_path, build_dir / "dragonchess")
+        os.chmod(build_dir / "dragonchess", 0o755)
+        for command in worker_runtime_commands(
+            str(target_dir),
+            install_python_deps=install_python_deps,
+        ):
+            run_local(worker.command_with_env(command), cwd=str(target_dir))
+        return f"{label}: synced locally to {target_dir} with prebuilt binary"
 
     with connect_ssh(worker, timeout=timeout) as ssh:
         with ssh.open_sftp() as sftp:
             resolved_remote_dir = resolve_remote_repo_dir(sftp, remote_repo_dir)
-            sftp_mkdir_p(sftp, resolved_remote_dir)
+            ensure_remote_repo_dir(ssh, resolved_remote_dir)
             copy_repo_to_sftp(sftp, local_repo_root, resolved_remote_dir)
-
-        if build_after_sync:
-            for command in build_commands(
+            remote_binary_path = copy_binary_to_sftp(
+                sftp,
+                local_binary_path,
                 resolved_remote_dir,
-                install_python_deps=install_python_deps,
-                clean_build=clean_build,
-            ):
-                code, out, err = run_remote(ssh, worker.command_with_env(command))
-                if code != 0:
-                    raise RuntimeError((err or out).strip() or f"command failed on {label}")
+            )
 
-        return f"{label}: synced to {resolved_remote_dir}"
+        for command in worker_runtime_commands(
+            resolved_remote_dir,
+            install_python_deps=install_python_deps,
+        ):
+            code, out, err = run_remote(ssh, worker.command_with_env(command))
+            if code != 0:
+                raise RuntimeError((err or out).strip() or f"command failed on {label}")
+
+        return f"{label}: synced to {resolved_remote_dir} with {remote_binary_path}"
 
 
 def choose_targets(workers: Iterable[WorkerSpec], include_disabled: bool) -> list[WorkerSpec]:
@@ -201,13 +232,22 @@ def choose_targets(workers: Iterable[WorkerSpec], include_disabled: bool) -> lis
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync DragonchessAI to cluster machines and optionally build headless workers."
+        description="Sync DragonchessAI to cluster machines and distribute a prebuilt headless binary."
     )
     parser.add_argument("--workers-file", default=str(REPO_ROOT / "workers.csv"))
     parser.add_argument("--repo-dir", default="~/DragonchessAI")
+    parser.add_argument("--binary-path", default=str(REPO_ROOT / "build" / "dragonchess"))
+    parser.add_argument(
+        "--build-local",
+        action="store_true",
+        help="Build the headless binary locally before syncing it to workers",
+    )
     parser.add_argument("--include-disabled", action="store_true")
-    parser.add_argument("--skip-build", action="store_true")
-    parser.add_argument("--install-python-deps", action="store_true")
+    parser.add_argument(
+        "--install-python-deps",
+        action="store_true",
+        help="Install minimal runtime deps on workers (currently just ray)",
+    )
     parser.add_argument("--clean-build", action="store_true")
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--jobs", type=int, default=8)
@@ -222,9 +262,20 @@ def main() -> int:
         raise SystemExit("No eligible workers found in workers.csv")
 
     local_repo_root = REPO_ROOT
+    local_binary_path = Path(args.binary_path).expanduser().resolve()
+    if args.build_local:
+        build_local_binary(local_binary_path, clean_build=args.clean_build)
+
+    if not local_binary_path.is_file():
+        raise SystemExit(
+            f"Local binary not found at {local_binary_path}. "
+            "Build it locally first or pass --build-local."
+        )
+
     max_workers = max(1, min(args.jobs, len(targets)))
 
     print(f"Syncing {len(targets)} workers from {local_repo_root} ...", flush=True)
+    print(f"Distributing prebuilt binary: {local_binary_path}", flush=True)
     failures: list[str] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -234,9 +285,8 @@ def main() -> int:
                 worker,
                 local_repo_root=local_repo_root,
                 remote_repo_dir=args.repo_dir,
-                build_after_sync=not args.skip_build,
+                local_binary_path=local_binary_path,
                 install_python_deps=args.install_python_deps,
-                clean_build=args.clean_build,
                 timeout=args.timeout,
             ): worker
             for worker in targets
