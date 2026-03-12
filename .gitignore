@@ -42,7 +42,7 @@ __pycache__/
 *.pyc
 
 # Test output and temporary files
-*.csv
+# *.csv
 *.json
 *.log
 # *.txt
