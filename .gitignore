@@ -45,7 +45,7 @@ __pycache__/
 *.csv
 *.json
 *.log
-*.txt
+# *.txt
 !CMakeLists.txt
 !examples/tournament_results/.gitkeep
 
