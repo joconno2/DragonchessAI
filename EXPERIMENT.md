@@ -331,33 +331,47 @@ the full experiment.
 
 ### 6.1 Prerequisites
 
-On the head node and on each Ray worker node, install:
+On your Mac or other head machine, install the full Python dependencies:
 
-- The headless `dragonchess` binary at `~/DragonchessAI/build/dragonchess` (or another shared repo path)
 - Python packages from `requirements-cluster.txt`
 
-The current cluster pipeline assumes one repo checkout per worker. Use:
+Workers only need:
+
+- a compatible `dragonchess` binary at `~/DragonchessAI/build/dragonchess`
+- the `ray` Python package
+
+Build the headless binary once locally:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DHEADLESS_ONLY=ON
+cmake --build build --parallel
+```
+
+Then distribute the repo and the prebuilt binary to the workers:
 
 ```bash
 python3 setup/cluster_sync.py \
     --workers-file workers.csv \
     --repo-dir ~/DragonchessAI \
+    --binary-path build/dragonchess \
     --install-python-deps
 ```
 
-That script syncs the repo and builds the worker binary with `-DHEADLESS_ONLY=ON`, so SDL is
-not required on the cluster nodes.
+That script syncs the repo, copies the prebuilt binary into each worker's `build/` directory, and
+optionally installs `ray` on the workers. It does not run `cmake` on the cluster nodes.
 
 ### 6.2 Starting a Ray Cluster
 
 ```bash
 python3 setup/setup_ray.py \
     --workers-file workers.csv \
-    --head-hostname NL214-Lin11170 \
+    --local-head \
+    --head-ip YOUR_MAC_IP \
     --restart
 ```
 
-`setup_ray.py` starts Ray with `--num-cpus <core_usage>` on every machine, so the cluster itself
+This starts the Ray head on your local machine and connects the workers to it. `setup_ray.py`
+starts Ray with `--num-cpus <core_usage>` on every worker, so the worker-side cluster capacity
 respects the CPU budget declared in `workers.csv`.
 
 ### 6.3 Running the Experiment
