@@ -1,104 +1,98 @@
 """
 Post-training evaluation for Dragonchess CC experiment.
-
-Takes the best evolved weights from each run and re-evaluates them using a
-stronger depth-3 alpha-beta agent against a hierarchy of opponents.  This
-separates the *piece value learning* story (training, depth=1) from the
-*gameplay performance* story (this script, depth=3).
-
-Matchups run per condition:
-  1. Evolved(depth=3)  vs  GreedyValue           -- sanity / easy baseline
-  2. Evolved(depth=3)  vs  Jackman(depth=3)       -- apples-to-apples vs expert values
-  3. Evolved(depth=3)  vs  AlphaBeta(depth=2)     -- standard strong opponent
-  4. [head-to-head]    CC(depth=3) vs Mono(depth=3) -- direct comparison
-
-Usage:
-    python3 evaluate_posttrain.py
-    python3 evaluate_posttrain.py --mono results/monolithic/ --cc results/cc/
-    python3 evaluate_posttrain.py --games 100 --workers 16 --out results/posttrain/
 """
 
-import subprocess
+from __future__ import annotations
+
+import argparse
 import json
 import os
-import argparse
 import time
-from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 from scipy import stats
 
-BINARY = os.path.join(os.path.dirname(__file__), "build", "dragonchess")
+from cluster.evaluator_pool import EvaluationRequest, LocalEvaluatorPool, RayEvaluatorPool
 
+
+BINARY = os.path.join(os.path.dirname(__file__), "build", "dragonchess")
 PIECE_NAMES = [
     "Sylph", "Griffin", "Dragon", "Oliphant", "Unicorn",
     "Hero", "Thief", "Cleric", "Mage",
-    "Paladin", "Warrior", "Basilisk", "Elemental", "Dwarf"
+    "Paladin", "Warrior", "Basilisk", "Elemental", "Dwarf",
+]
+JACKMAN_WEIGHTS = [1.0, 2.0, 9.0, 5.0, 8.0, 5.0, 2.5, 4.5, 4.0, 8.0, 1.0, 3.0, 4.0, 2.0]
+MATCHUPS = [
+    ("vs_greedy", "greedyvalue", 0, None),
+    ("vs_ab2", "alphabeta", 2, None),
+    ("vs_jackman", "evolvable", 3, JACKMAN_WEIGHTS),
+    ("vs_ab3", "alphabeta", 3, None),
 ]
 
-# Jackman (1997) expert-tuned values — used as the depth-3 reference opponent
-JACKMAN_WEIGHTS = [1.0, 2.0, 9.0, 5.0, 8.0, 5.0, 2.5, 4.5, 4.0, 8.0, 1.0, 3.0, 4.0, 2.0]
+
+def build_match_request(
+    gold_weights,
+    *,
+    gold_depth,
+    scarlet_type,
+    scarlet_depth,
+    scarlet_weights,
+    games,
+    threads_per_eval,
+    timeout_s,
+):
+    return EvaluationRequest(
+        gold_ai="evolvable",
+        gold_weights=list(gold_weights),
+        gold_depth=gold_depth,
+        scarlet_ai=scarlet_type,
+        scarlet_depth=scarlet_depth,
+        scarlet_weights=None if scarlet_weights is None else list(scarlet_weights),
+        games=games,
+        threads=threads_per_eval,
+        timeout_s=timeout_s,
+        quiet=True,
+    )
 
 
-def weights_to_str(weights):
-    return ",".join(f"{w:.6f}" for w in weights)
-
-
-def play_match(gold_weights, gold_depth, scarlet_type, scarlet_depth,
-               scarlet_weights, games):
-    """Run one match; returns (gold_wins, total_games) or None on failure."""
-    cmd = [
-        BINARY, "--headless", "--mode", "tournament",
-        "--games", str(games),
-        "--gold-ai", "evolvable",
-        "--gold-weights", weights_to_str(gold_weights),
-        "--gold-depth", str(gold_depth),
-        "--scarlet-ai", scarlet_type,
-        "--scarlet-depth", str(scarlet_depth),
-        "--quiet",
-        "--output-json", "-",
-    ]
-    if scarlet_type == "evolvable":
-        cmd += ["--scarlet-weights", weights_to_str(scarlet_weights)]
+def evaluate_weights(
+    weights,
+    games,
+    eval_depth=3,
+    *,
+    evaluator=None,
+    threads_per_eval=1,
+    timeout_s=1200.0,
+):
+    owns_pool = evaluator is None
+    if owns_pool:
+        evaluator = LocalEvaluatorPool(
+            max_workers=1,
+            binary_path=BINARY,
+            threads_per_eval=threads_per_eval,
+        )
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=1200)
-        if r.returncode != 0:
-            return None
-        data = json.loads(r.stdout)
-        s = data["summary"]
-        return s["gold_wins"], s["total_games"]
-    except Exception:
-        return None
-
-
-def evaluate_weights(weights, games, eval_depth=3):
-    """Evaluate a weight vector; returns dict of win rates.
-
-    Matchups (in increasing difficulty):
-      vs_greedy    - sanity/easy baseline (fast)
-      vs_ab2       - same opponent as training (generalization check)
-      vs_jackman   - expert piece values at eval_depth (key paper comparison)
-      vs_ab3       - one depth above training opponent (ceiling test)
-    """
-    results = {}
-
-    # 1. vs GreedyValue — sanity check, fast
-    r = play_match(weights, eval_depth, "greedyvalue", 0, None, games)
-    results["vs_greedy"] = r[0] / r[1] if r else None
-
-    # 2. vs AlphaBeta(depth=2) — same opponent used during training; generalization check
-    r = play_match(weights, eval_depth, "alphabeta", 2, None, games)
-    results["vs_ab2"] = r[0] / r[1] if r else None
-
-    # 3. vs Jackman(depth=eval_depth) — equal-depth, expert piece values (key paper comparison)
-    r = play_match(weights, eval_depth, "evolvable", eval_depth,
-                   JACKMAN_WEIGHTS, games)
-    results["vs_jackman"] = r[0] / r[1] if r else None
-
-    # 4. vs AlphaBeta(depth=3) — one depth above training opponent; ceiling/transfer test
-    r = play_match(weights, eval_depth, "alphabeta", 3, None, games)
-    results["vs_ab3"] = r[0] / r[1] if r else None
-
-    return results
+        requests = [
+            build_match_request(
+                weights,
+                gold_depth=eval_depth,
+                scarlet_type=scarlet_type,
+                scarlet_depth=eval_depth if scarlet_type == "evolvable" else scarlet_depth,
+                scarlet_weights=scarlet_weights,
+                games=games,
+                threads_per_eval=threads_per_eval,
+                timeout_s=timeout_s,
+            )
+            for _, scarlet_type, scarlet_depth, scarlet_weights in MATCHUPS
+        ]
+        outcomes = evaluator.evaluate_many(requests)
+        return {
+            matchup_key: outcome.win_rate
+            for (matchup_key, _, _, _), outcome in zip(MATCHUPS, outcomes)
+        }
+    finally:
+        if owns_pool:
+            evaluator.shutdown()
 
 
 def load_runs(directory):
@@ -112,46 +106,119 @@ def load_runs(directory):
     return runs
 
 
-def run_evaluation(mono_runs, cc_runs, games=50, eval_depth=3,
-                   n_workers=8, out_dir=None):
-    """Evaluate all runs from both conditions in parallel."""
+def run_evaluation(
+    mono_runs,
+    cc_runs,
+    games=50,
+    eval_depth=3,
+    n_workers=8,
+    *,
+    evaluator=None,
+    threads_per_eval=1,
+    timeout_s=1200.0,
+):
+    """Evaluate all runs from both conditions using the provided backend."""
+    owns_pool = evaluator is None
+    if owns_pool:
+        evaluator = LocalEvaluatorPool(
+            max_workers=n_workers,
+            binary_path=BINARY,
+            threads_per_eval=threads_per_eval,
+        )
+
     all_weights = (
-        [("mono", r["run_id"], r["best_weights"]) for r in mono_runs] +
-        [("cc",   r["run_id"], r["best_weights"]) for r in cc_runs]
+        [("mono", run["run_id"], run["best_weights"]) for run in mono_runs]
+        + [("cc", run["run_id"], run["best_weights"]) for run in cc_runs]
+    )
+    total_matchups = len(all_weights) * len(MATCHUPS)
+    print(
+        f"Evaluating {len(all_weights)} agents at depth={eval_depth}, "
+        f"{games} games/matchup, {total_matchups} total matchups..."
     )
 
-    print(f"Evaluating {len(all_weights)} agents at depth={eval_depth}, "
-          f"{games} games/matchup, {n_workers} workers...")
-
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=n_workers) as executor:
-        futures = {
-            executor.submit(evaluate_weights, w, games, eval_depth): (cond, rid)
-            for cond, rid, w in all_weights
-        }
+    jobs = []
+    requests = []
+    for condition, run_id, weights in all_weights:
+        for matchup_key, scarlet_type, scarlet_depth, scarlet_weights in MATCHUPS:
+            jobs.append((condition, run_id, matchup_key))
+            requests.append(
+                build_match_request(
+                    weights,
+                    gold_depth=eval_depth,
+                    scarlet_type=scarlet_type,
+                    scarlet_depth=eval_depth if scarlet_type == "evolvable" else scarlet_depth,
+                    scarlet_weights=scarlet_weights,
+                    games=games,
+                    threads_per_eval=threads_per_eval,
+                    timeout_s=timeout_s,
+                )
+            )
+
+    try:
+        outcomes = evaluator.evaluate_many(requests)
+    finally:
+        if owns_pool:
+            evaluator.shutdown()
+
+    grouped: dict[tuple[str, int], dict[str, float]] = {}
+    for (condition, run_id, matchup_key), outcome in zip(jobs, outcomes):
+        grouped.setdefault((condition, run_id), {"run_id": run_id})[matchup_key] = outcome.win_rate
 
     results = {"mono": [], "cc": []}
-    for future, (cond, rid) in futures.items():
-        r = future.result()
-        r["run_id"] = rid
-        results[cond].append(r)
+    for (condition, _), payload in grouped.items():
+        results[condition].append(payload)
+
+    for condition in results:
+        results[condition].sort(key=lambda item: item["run_id"])
 
     elapsed = time.time() - t0
     print(f"Completed in {elapsed:.0f}s")
     return results
 
 
-def head_to_head(mono_runs, cc_runs, games=100, eval_depth=3, n_workers=8):
+def head_to_head(
+    mono_runs,
+    cc_runs,
+    games=100,
+    eval_depth=3,
+    n_workers=8,
+    *,
+    evaluator=None,
+    threads_per_eval=1,
+    timeout_s=1200.0,
+):
     """Direct CC vs Mono matchup using mean weights from each condition."""
     mono_mean = np.mean([r["best_weights"] for r in mono_runs], axis=0).tolist()
-    cc_mean   = np.mean([r["best_weights"] for r in cc_runs],   axis=0).tolist()
+    cc_mean = np.mean([r["best_weights"] for r in cc_runs], axis=0).tolist()
 
     print(f"\nHead-to-head: CC vs Mono mean weights ({games} games)...")
     t0 = time.time()
-    r = play_match(cc_mean, eval_depth, "evolvable", eval_depth, mono_mean, games)
+    owns_pool = evaluator is None
+    if owns_pool:
+        evaluator = LocalEvaluatorPool(
+            max_workers=n_workers,
+            binary_path=BINARY,
+            threads_per_eval=threads_per_eval,
+        )
+    try:
+        request = build_match_request(
+            cc_mean,
+            gold_depth=eval_depth,
+            scarlet_type="evolvable",
+            scarlet_depth=eval_depth,
+            scarlet_weights=mono_mean,
+            games=games,
+            threads_per_eval=threads_per_eval,
+            timeout_s=timeout_s,
+        )
+        outcome = evaluator.evaluate_many([request])[0]
+    finally:
+        if owns_pool:
+            evaluator.shutdown()
     elapsed = time.time() - t0
-    if r:
-        cc_wins, total = r
+    if outcome.total_games > 0:
+        cc_wins, total = outcome.gold_wins, outcome.total_games
         print(f"  CC(depth={eval_depth}) vs Mono(depth={eval_depth}): "
               f"{cc_wins}/{total} ({cc_wins/total:.3f}) for CC  [{elapsed:.0f}s]")
         return cc_wins / total, total
@@ -218,6 +285,18 @@ def main():
                         help="Eval depth for evolved agents (default: 3)")
     parser.add_argument("--workers", type=int,
                         default=max(1, (os.cpu_count() or 4) // 2))
+    parser.add_argument(
+        "--threads-per-eval",
+        type=int,
+        default=1,
+        help="Threads passed to each dragonchess tournament subprocess",
+    )
+    parser.add_argument("--ray-address", type=str, default=None,
+                        help="Optional Ray address for distributed post-train evaluation")
+    parser.add_argument("--workers-csv", type=str, default="workers.csv",
+                        help="workers.csv path when using --ray-address")
+    parser.add_argument("--repo-dir", type=str, default="~/DragonchessAI",
+                        help="Repository path on each Ray worker when using --ray-address")
     args = parser.parse_args()
 
     mono_runs = load_runs(args.mono)
@@ -228,18 +307,51 @@ def main():
         return
 
     print(f"Loaded: {len(mono_runs)} monolithic, {len(cc_runs)} CC runs")
+    evaluator = None
+    try:
+        if args.ray_address:
+            import ray
 
-    results = run_evaluation(mono_runs, cc_runs,
-                             games=args.games, eval_depth=args.depth,
-                             n_workers=args.workers)
-    print_summary(results)
+            ray.init(address=args.ray_address)
+            evaluator = RayEvaluatorPool(
+                workers_csv=args.workers_csv,
+                repo_dir=args.repo_dir,
+                threads_per_eval=args.threads_per_eval,
+            )
+            evaluator.start()
 
-    if mono_runs and cc_runs:
-        head_to_head(mono_runs, cc_runs,
-                     games=args.games * 2, eval_depth=args.depth,
-                     n_workers=args.workers)
+        results = run_evaluation(
+            mono_runs,
+            cc_runs,
+            games=args.games,
+            eval_depth=args.depth,
+            n_workers=args.workers,
+            evaluator=evaluator,
+            threads_per_eval=args.threads_per_eval,
+        )
+        print_summary(results)
 
-    save_results(results, args.out, args.depth, args.games)
+        if mono_runs and cc_runs:
+            head_to_head(
+                mono_runs,
+                cc_runs,
+                games=args.games * 2,
+                eval_depth=args.depth,
+                n_workers=args.workers,
+                evaluator=evaluator,
+                threads_per_eval=args.threads_per_eval,
+            )
+
+        save_results(results, args.out, args.depth, args.games)
+    finally:
+        if evaluator is not None:
+            evaluator.shutdown()
+            try:
+                import ray
+
+                ray.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

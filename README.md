@@ -97,6 +97,13 @@ cmake --build build --parallel
 
 The build process generates two executables: `dragonchess` (the main program) and `test_dragonchess` (unit tests for move generation and game logic). The parallel build option leverages multiple cores to reduce compilation time.
 
+For cluster workers that only need the headless tournament runner, you can skip the SDL/UI dependencies:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DHEADLESS_ONLY=ON
+cmake --build build --parallel
+```
+
 ### Plugin Development
 
 Student plugins require only four source files from the main project for compilation:
@@ -169,6 +176,7 @@ dragonchess/
 ## Additional Documentation ![icon](assets/gold_hero.png)
 
 - **HEADLESS_MODE.md**: Comprehensive guide to headless execution, CLI options, and batch processing
+- **CLUSTER_RAY.md**: End-to-end guide for syncing workers, starting Ray, and running distributed CMA-ES experiments
 - **PLUGIN_SYSTEM.md**: Technical documentation for the plugin architecture and API reference
 - **STUDENT_GUIDE.md**: Tutorial for developing AI agents with progressive examples
 - **examples/README.md**: Detailed description of provided example implementations and tournament results

@@ -331,57 +331,63 @@ the full experiment.
 
 ### 6.1 Prerequisites
 
-On each Ray worker node, you need:
-- The compiled `dragonchess` binary at `DragonchessAI/build/dragonchess`
-- Python packages: `pip install ray cma numpy scipy matplotlib`
+On the head node and on each Ray worker node, install:
 
-The binary is the bottleneck. Options:
-- **Shared filesystem (NFS/Lustre):** Build once, path is identical on all nodes.
-- **No shared FS:** Build on head node, then `ray rsync-up` or scp to workers, or use
-  a container/conda env that includes the binary.
+- The headless `dragonchess` binary at `~/DragonchessAI/build/dragonchess` (or another shared repo path)
+- Python packages from `requirements-cluster.txt`
 
-Make sure the `BINARY` path at the top of `train_cma.py` and `train_cc.py` resolves correctly
-on workers. It uses `__file__`-relative paths, so as long as the repo is at the same path on
-all nodes (typical with NFS), it just works.
+The current cluster pipeline assumes one repo checkout per worker. Use:
+
+```bash
+python3 setup/cluster_sync.py \
+    --workers-file workers.csv \
+    --repo-dir ~/DragonchessAI \
+    --install-python-deps
+```
+
+That script syncs the repo and builds the worker binary with `-DHEADLESS_ONLY=ON`, so SDL is
+not required on the cluster nodes.
 
 ### 6.2 Starting a Ray Cluster
 
-If your cluster uses Ray natively (not Kubernetes):
-
 ```bash
-# On head node:
-ray start --head --port=6379
-
-# On each worker node (replace HEAD_IP):
-ray start --address=HEAD_IP:6379
-
-# Verify cluster:
-python3 -c "import ray; ray.init(address='auto'); print(ray.cluster_resources())"
+python3 setup/setup_ray.py \
+    --workers-file workers.csv \
+    --head-hostname NL214-Lin11170 \
+    --restart
 ```
+
+`setup_ray.py` starts Ray with `--num-cpus <core_usage>` on every machine, so the cluster itself
+respects the CPU budget declared in `workers.csv`.
 
 ### 6.3 Running the Experiment
 
 ```bash
-# From the DragonchessAI directory on the head node:
+# From the DragonchessAI directory on the Ray head node:
 python3 run_ray.py \
+    --address auto \
+    --workers-csv workers.csv \
+    --repo-dir ~/DragonchessAI \
     --runs 30 \
     --games 200 \
     --generations 300 \
     --opponent alphabeta \
     --opponent-depth 2 \
-    --workers 4 \
+    --parallel-runs 4 \
+    --threads-per-eval 1 \
     --out-mono results/monolithic/ \
     --out-cc   results/cc/
 ```
 
-`--workers N` controls ThreadPoolExecutor parallelism *within* each training run (evaluating
-candidates in parallel). Each Ray task is one complete run. Schedule so that
-`num_ray_tasks_in_flight × workers × games_per_eval_time` fits within your cluster resources.
+`run_ray.py` now uses a shared evaluator-actor pool across the cluster:
 
-On a 16-node × 32-core cluster (512 cores total), a reasonable setting is:
-- `--workers 8` (8 cores per run for parallel candidate evaluation)
-- Ray will schedule up to ~64 concurrent runs across the cluster
-- Both conditions (60 runs total) complete in parallel
+- each worker contributes `core_usage` evaluator slots
+- each evaluator actor reserves `num_cpus=1`
+- each tournament subprocess runs with `--threads 1`
+- `--parallel-runs` controls how many training coordinators are active on the head node at once
+
+This means cluster capacity comes from the evaluator pool, not from allocating whole-Ray-task CPU
+bundles to individual runs.
 
 ```bash
 # Monitor progress:
@@ -391,20 +397,20 @@ watch -n60 'ls results/monolithic/*.json results/cc/*.json | wc -l'
 
 ### 6.4 What run_ray.py Does
 
-`run_ray.py` is a thin wrapper that:
+`run_ray.py` now:
 1. Calls `ray.init(address='auto')` to connect to the running cluster
-2. Wraps `train_cma.run_once` and `train_cc.run_once` as `@ray.remote` tasks
-3. Dispatches all 30+30 runs as Ray tasks simultaneously
-4. Waits for all futures and prints a summary
+2. Builds a shared pool of evaluator actors from `workers.csv`
+3. Launches multiple monolithic and CC run coordinators on the head node
+4. Lets those runs share the evaluator pool while writing results locally on the head node
 
-Each task writes its own `run_NNN.json` directly to `out_dir` (which should be on a shared FS).
-If there is no shared FS, you will need to return the result dict from the Ray task and save
-it on the head node — see the comment in `run_ray.py`.
+Each completed run still writes the same `run_NNN.json` schema, so the downstream dashboard and
+analysis scripts remain unchanged.
 
 ### 6.5 Fault Tolerance
 
-Ray tasks that fail (binary crash, timeout, OOM) will propagate as exceptions. `run_ray.py`
-catches per-task failures and logs them; successful runs are still saved. Re-run with
+Evaluator failures now propagate as explicit exceptions instead of being silently converted into
+neutral fitness. `run_ray.py` catches per-run failures and logs them; successful runs are still
+saved. Re-run with
 `--run-id-offset N` to fill in missing runs without overwriting completed ones.
 
 ---
