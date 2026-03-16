@@ -70,7 +70,7 @@ class WorkerSpec:
 
     @property
     def is_enabled(self) -> bool:
-        return self.in_cluster and self.core_usage > 0 and bool(self.ssh_host)
+        return self.in_cluster and bool(self.ssh_host)
 
     @property
     def is_local(self) -> bool:

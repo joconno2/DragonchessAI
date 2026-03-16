@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import threading
@@ -49,8 +51,42 @@ def weights_to_str(weights: Sequence[float]) -> str:
     return ",".join(f"{weight:.6f}" for weight in weights)
 
 
-def binary_path_from_repo(repo_dir: str | os.PathLike[str]) -> str:
-    return str(Path(repo_dir).expanduser().resolve() / "build" / "dragonchess")
+def binary_path_from_repo(repo_dir: str | os.PathLike[str] | None) -> str:
+    if repo_dir is None or str(repo_dir).strip() == "":
+        base_dir = Path.cwd()
+    else:
+        base_dir = Path(repo_dir).expanduser()
+    return str(base_dir.resolve() / "build" / "dragonchess")
+
+
+def materialize_executable(binary_path: str | os.PathLike[str]) -> str:
+    source = Path(binary_path).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"dragonchess binary not found at {source}")
+
+    stat = source.stat()
+    cache_root = Path.home() / ".cache" / "dragonchess-ray"
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    key = f"{source}:{stat.st_size}:{stat.st_mtime_ns}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    cache_dir = cache_root / digest
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_binary = cache_dir / "dragonchess"
+    if not cached_binary.exists() or cached_binary.stat().st_size != stat.st_size:
+        temp_binary = cache_dir / f".dragonchess.tmp-{os.getpid()}-{threading.get_ident()}"
+        try:
+            shutil.copy2(source, temp_binary)
+            temp_binary.chmod(0o755)
+            os.replace(temp_binary, cached_binary)
+        finally:
+            if temp_binary.exists():
+                temp_binary.unlink()
+    else:
+        cached_binary.chmod(0o755)
+
+    return str(cached_binary)
 
 
 def _normalize_request(request: EvaluationRequest, default_threads: int) -> EvaluationRequest:
@@ -174,13 +210,21 @@ def _resolve_ray_node_id(worker: WorkerSpec, nodes: list[dict[str, Any]]) -> str
     return None
 
 
+def _node_cpu_capacity(node: dict[str, Any]) -> int:
+    resources = node.get("Resources") or {}
+    try:
+        return max(0, int(float(resources.get("CPU", 0))))
+    except Exception:
+        return 0
+
+
 def _make_ray_evaluator_actor():
     import ray
 
     @ray.remote
     class RayTournamentEvaluator:
-        def __init__(self, repo_dir: str, slot_name: str, threads_per_eval: int) -> None:
-            self.binary_path = binary_path_from_repo(repo_dir)
+        def __init__(self, repo_dir: str | None, slot_name: str, threads_per_eval: int) -> None:
+            self.binary_path = materialize_executable(binary_path_from_repo(repo_dir))
             self.slot_name = slot_name
             self.threads_per_eval = max(1, int(threads_per_eval))
             self.host = socket.gethostname()
@@ -206,12 +250,14 @@ class RayEvaluatorPool:
         self,
         *,
         workers_csv: str,
-        repo_dir: str,
+        repo_dir: str | None = None,
         threads_per_eval: int = 1,
+       max_request_retries: int = 10,
     ) -> None:
         self.workers_csv = workers_csv
         self.repo_dir = repo_dir
         self.threads_per_eval = max(1, int(threads_per_eval))
+        self.max_request_retries = max(0, int(max_request_retries))
         self.actors: list[Any] = []
         self.capacity_by_host: dict[str, int] = {}
         self._next_actor = 0
@@ -235,8 +281,21 @@ class RayEvaluatorPool:
                 missing.append((worker.hostname, worker.ip_address))
                 continue
 
-            self.capacity_by_host[worker.display_name] = int(worker.core_usage)
-            for slot_index in range(int(worker.core_usage)):
+            node = next(
+                (
+                    candidate
+                    for candidate in nodes
+                    if str(candidate.get("NodeID") or "") == node_id
+                ),
+                None,
+            )
+            slot_count = _node_cpu_capacity(node or {})
+            if slot_count <= 0:
+                missing.append((worker.hostname, worker.ip_address))
+                continue
+
+            self.capacity_by_host[worker.display_name] = slot_count
+            for slot_index in range(slot_count):
                 slot_name = f"{worker.display_name}-slot-{slot_index + 1}"
                 actor = actor_cls.options(
                     scheduling_strategy=NodeAffinitySchedulingStrategy(node_id, soft=False),
@@ -264,6 +323,45 @@ class RayEvaluatorPool:
     def actor_count(self) -> int:
         return len(self.actors)
 
+    def _pick_actor(self, excluded: Sequence[Any] = ()) -> Any:
+        excluded_ids = {id(actor) for actor in excluded}
+        with self._lock:
+            if not self.actors:
+                raise RuntimeError("No evaluator actors are available")
+
+            actor_count = len(self.actors)
+            for offset in range(actor_count):
+                index = (self._next_actor + offset) % actor_count
+                actor = self.actors[index]
+                if id(actor) in excluded_ids:
+                    continue
+                self._next_actor = (index + 1) % actor_count
+                return actor
+
+        raise RuntimeError("No evaluator actors are available for retry")
+
+    def _remove_actor(self, actor: Any) -> bool:
+        with self._lock:
+            original_count = len(self.actors)
+            self.actors = [candidate for candidate in self.actors if candidate != actor]
+            if len(self.actors) == original_count:
+                return False
+            if self.actors:
+                self._next_actor %= len(self.actors)
+            else:
+                self._next_actor = 0
+            return True
+
+    def _should_evict_actor(self, exc: Exception) -> bool:
+        import ray
+
+        exception_types = tuple(
+            getattr(ray.exceptions, name)
+            for name in ("RayActorError", "ActorDiedError", "ActorUnavailableError")
+            if hasattr(ray.exceptions, name)
+        )
+        return isinstance(exc, exception_types)
+
     def evaluate_many(self, requests: Iterable[EvaluationRequest]) -> list[EvaluationResult]:
         import ray
 
@@ -275,16 +373,42 @@ class RayEvaluatorPool:
         if not self.actors:
             raise RuntimeError("RayEvaluatorPool.start() must be called before evaluate_many()")
 
-        with self._lock:
-            start = self._next_actor
-            self._next_actor = (self._next_actor + len(request_list)) % len(self.actors)
+        payloads = [None] * len(request_list)
+        attempts = [0] * len(request_list)
+        pending: dict[Any, tuple[int, Any]] = {}
+        request_payloads = [asdict(request) for request in request_list]
 
-        refs = []
-        for index, request in enumerate(request_list):
-            actor = self.actors[(start + index) % len(self.actors)]
-            refs.append(actor.evaluate.remote(asdict(request)))
+        def submit_request(index: int, excluded: Sequence[Any] = ()) -> None:
+            actor = self._pick_actor(excluded)
+            attempts[index] += 1
+            pending[actor.evaluate.remote(request_payloads[index])] = (index, actor)
 
-        payloads = ray.get(refs)
+        for index in range(len(request_list)):
+            submit_request(index)
+
+        while pending:
+            ready, _ = ray.wait(list(pending.keys()), num_returns=1)
+            ref = ready[0]
+            index, actor = pending.pop(ref)
+
+            try:
+                payloads[index] = ray.get(ref)
+            except Exception as exc:
+                excluded = ()
+                if self._should_evict_actor(exc):
+                    self._remove_actor(actor)
+                else:
+                    excluded = (actor,)
+
+                if attempts[index] <= self.max_request_retries:
+                    submit_request(index, excluded)
+                    continue
+
+                raise RuntimeError(
+                    f"Evaluation request {index} failed after "
+                    f"{self.max_request_retries} retries"
+                ) from exc
+
         return [EvaluationResult(**payload) for payload in payloads]
 
     def describe_capacity(self) -> dict[str, int]:

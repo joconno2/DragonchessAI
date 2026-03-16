@@ -3,4 +3,6 @@ cma==3.3.0
 numpy==1.26.4
 paramiko
 ray[default]==2.46.0
+rich
 scipy
+matplotlib

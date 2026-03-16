@@ -67,6 +67,10 @@ def evaluate_batch(evaluator, requests, retries: int = 1):
     raise last_error  # pragma: no cover
 
 
+def utc_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def evaluate(
     weights,
     games_per_eval=30,
@@ -113,6 +117,7 @@ def run_once(
     evaluator=None,
     threads_per_eval=1,
     timeout_s=300.0,
+    progress_callback=None,
 ):
     """Run one CC-CMA-ES optimization and return (best_weights, fitness_log, result)."""
     es_list = []
@@ -142,6 +147,7 @@ def run_once(
     fitness_log = []
     t0 = time.time()
     generation = 0
+    evaluated_games = 0
 
     try:
         while generation < max_generations:
@@ -178,6 +184,7 @@ def run_once(
                     for weights in full_weights_list
                 ]
                 outcomes = evaluate_batch(evaluator, requests)
+                evaluated_games += len(requests) * games_per_eval
                 fitnesses = [-outcome.win_rate for outcome in outcomes]
                 es.tell(candidates, fitnesses)
 
@@ -194,7 +201,15 @@ def run_once(
                 timeout_s=timeout_s,
             )
             win_rate = evaluate_batch(evaluator, [best_request])[0].win_rate
+            evaluated_games += games_per_eval
             fitness_log.append(win_rate)
+            if progress_callback is not None:
+                progress_callback(
+                    generation=generation,
+                    evaluated_games=evaluated_games,
+                    latest_win_rate=win_rate,
+                    best_win_rate=max(fitness_log),
+                )
 
             if verbose and (generation % 10 == 0 or generation == 1):
                 elapsed = time.time() - t0
@@ -229,6 +244,7 @@ def run_once(
 
         result = {
             "run_id": run_id,
+            "completed_at_utc": utc_timestamp(),
             "best_win_rate": best_win_rate,
             "best_weights": list(best_weights),
             "fitness_log": fitness_log,
