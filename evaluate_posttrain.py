@@ -13,6 +13,7 @@ import numpy as np
 from scipy import stats
 
 from cluster.evaluator_pool import EvaluationRequest, LocalEvaluatorPool, RayEvaluatorPool
+from cluster.runtime_sync import stage_runtime_working_dir
 
 
 BINARY = os.path.join(os.path.dirname(__file__), "build", "dragonchess")
@@ -296,8 +297,23 @@ def main():
     parser.add_argument("--workers-csv", type=str, default="workers.csv",
                         help="workers.csv path when using --ray-address")
     parser.add_argument("--repo-dir", type=str, default="~/DragonchessAI",
-                        help="Repository path on each Ray worker when using --ray-address")
+                        help="Legacy worker repo path when using --ray-address --no-runtime-sync")
+    parser.add_argument("--binary-path", type=str, default="build/dragonchess",
+                        help="Local dragonchess binary path to include in the Ray runtime package")
+    parser.add_argument("--no-runtime-sync", action="store_true",
+                        help="Do not stage the repo via Ray runtime_env; expect --repo-dir on workers")
     args = parser.parse_args()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    workers_csv = (
+        os.path.join(script_dir, args.workers_csv)
+        if not os.path.isabs(args.workers_csv)
+        else args.workers_csv
+    )
+    binary_path = (
+        os.path.join(script_dir, args.binary_path)
+        if not os.path.isabs(args.binary_path)
+        else args.binary_path
+    )
 
     mono_runs = load_runs(args.mono)
     cc_runs   = load_runs(args.cc)
@@ -308,14 +324,24 @@ def main():
 
     print(f"Loaded: {len(mono_runs)} monolithic, {len(cc_runs)} CC runs")
     evaluator = None
+    runtime_package = None
     try:
         if args.ray_address:
             import ray
+            runtime_env = None
+            repo_dir_for_workers = args.repo_dir
+            if not args.no_runtime_sync:
+                runtime_package = stage_runtime_working_dir(
+                    script_dir,
+                    binary_path=binary_path,
+                )
+                repo_dir_for_workers = None
+                runtime_env = {"working_dir": str(runtime_package.path)}
 
-            ray.init(address=args.ray_address)
+            ray.init(address=args.ray_address, runtime_env=runtime_env)
             evaluator = RayEvaluatorPool(
-                workers_csv=args.workers_csv,
-                repo_dir=args.repo_dir,
+                workers_csv=workers_csv,
+                repo_dir=repo_dir_for_workers,
                 threads_per_eval=args.threads_per_eval,
             )
             evaluator.start()
@@ -352,6 +378,8 @@ def main():
                 ray.shutdown()
             except Exception:
                 pass
+        if runtime_package is not None:
+            runtime_package.cleanup()
 
 
 if __name__ == "__main__":

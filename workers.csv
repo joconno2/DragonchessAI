@@ -7,8 +7,6 @@ room,hostname,ip-address,monitor-name,username,password,env,core_usage
 214,NL214-Lin11174,136.244.224.227,zombie,,,,3
 214,NL214-Lin11176,136.244.224.164,vampire,,,,3
 214,NL214-Lin11175,136.244.224.250,orc,,,,3
-214,NL214-Lin11166,136.244.224.39,goblin,,,,3
 214,NL214-Lin11163,136.244.224.242,beholder,,,,3
 214,NL214-Lin11172,136.244.224.241,kobold,,,,3
 214,NL214-Lin11182,136.244.224.29,ghast,,,,3
-214,NL214-Lin11173,136.244.224.86,slime,,,,3

@@ -81,16 +81,14 @@ def detect_local_ip_for_workers(workers: list[WorkerSpec]) -> str:
 def head_start_command(worker: WorkerSpec, port: int, dashboard_host: str) -> str:
     return worker.command_with_env(
         "ray stop --force || true; "
-        f"ray start --head --port={int(port)} --dashboard-host={shlex.quote(dashboard_host)} "
-        f"--num-cpus={int(worker.core_usage)}"
+        f"ray start --head --port={int(port)} --dashboard-host={shlex.quote(dashboard_host)}"
     )
 
 
 def worker_start_command(worker: WorkerSpec, head_ip: str, port: int) -> str:
     return worker.command_with_env(
         "ray stop --force || true; "
-        f"ray start --address={shlex.quote(f'{head_ip}:{int(port)}')} "
-        f"--num-cpus={int(worker.core_usage)}"
+        f"ray start --address={shlex.quote(f'{head_ip}:{int(port)}')}"
     )
 
 
@@ -99,7 +97,7 @@ def stop_command(worker: WorkerSpec) -> str:
 
 
 def local_head_start_command(port: int, dashboard_host: str, head_cpus: int | None, head_ip: str | None) -> str:
-    parts = ["ray stop --force || true", "ray start --head"]
+    parts = ["ray stop --force || true;", "ray start --head"]
     parts.append(f"--port={int(port)}")
     parts.append(f"--dashboard-host={shlex.quote(dashboard_host)}")
     if head_cpus is not None:
@@ -257,7 +255,7 @@ def main() -> int:
             head_ip = head_worker.ip_address or socket.gethostbyname(head_worker.hostname)
             exclude_hostname = head_worker.hostname
             print(
-                f"Starting Ray head {head_worker.display_name} with {head_worker.core_usage} CPUs ...",
+                f"Starting Ray head {head_worker.display_name} with all available CPUs ...",
                 flush=True,
             )
             execute_on_worker(

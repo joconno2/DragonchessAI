@@ -7,10 +7,10 @@ This guide covers the distributed experiment pipeline used by `run_ray.py`.
 The cluster workflow has three layers:
 
 1. `setup/cluster_sync.py` copies the repository to the worker machines and distributes a prebuilt headless binary.
-2. `setup/setup_ray.py` starts or stops the Ray cluster and limits each worker node to the `core_usage` capacity declared in `workers.csv`.
+2. `setup/setup_ray.py` starts or stops the Ray cluster using all CPUs Ray detects on each included worker node.
 3. `run_ray.py` launches multiple training runs on the head node while a shared pool of Ray evaluator actors executes tournaments across the cluster.
 
-Each evaluator actor reserves `num_cpus=1` and runs `dragonchess` with `--threads 1`, so `core_usage` maps directly to the maximum number of concurrent tournament evaluations on a machine.
+Each evaluator actor reserves `num_cpus=1` and runs `dragonchess` with `--threads 1`, so one evaluator slot maps to one worker CPU.
 
 ## workers.csv
 
@@ -21,7 +21,7 @@ The distributed tooling reads these columns from `workers.csv`:
 - `username`
 - `password`
 - `env`
-- `core_usage`
+- `core_usage` (legacy; currently ignored)
 
 Optional:
 
@@ -34,7 +34,7 @@ Behavior:
 - blank `password`: defaults to `geesearebigtoddlers1`
 - `env` set to `mycondaenv`: activate that conda env before running commands
 - `env` set to a path such as `~/venvs/dc`: source `~/venvs/dc/bin/activate`
-- `core_usage <= 0`: no evaluator slots are created for that machine
+- `core_usage` is ignored by the current runtime; use `in_cluster=false` to skip a machine
 
 ## Install Python Dependencies
 
@@ -95,7 +95,7 @@ python3 setup/setup_ray.py \
   --restart
 ```
 
-`setup_ray.py` starts Ray on each worker with `--num-cpus <core_usage>`, so the worker-side cluster capacity respects your per-node CPU budget.
+`setup_ray.py` starts Ray on each worker without a `--num-cpus` cap, so each worker contributes all CPUs Ray detects on that machine.
 
 ## Run The Experiment
 
@@ -154,4 +154,4 @@ Recommended bring-up order:
 python3 run_ray.py --runs 1 --games 10 --generations 2 --parallel-runs 1 --threads-per-eval 1
 ```
 
-5. Confirm evaluator capacity matches the sum of `core_usage` across enabled rows.
+5. Confirm evaluator capacity matches the total CPU count Ray reports across the enabled worker nodes.

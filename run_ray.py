@@ -7,12 +7,131 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import numpy as np
 
 from cluster.evaluator_pool import RayEvaluatorPool
+from cluster.runtime_sync import stage_runtime_working_dir
+
+try:
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+    from rich.table import Table
+
+    RICH_AVAILABLE = True
+except ImportError:  # pragma: no cover - plain fallback when rich is unavailable
+    Console = None
+    Group = None
+    Live = None
+    Panel = None
+    Progress = None
+    SpinnerColumn = None
+    TextColumn = None
+    BarColumn = None
+    TaskProgressColumn = None
+    TimeElapsedColumn = None
+    MofNCompleteColumn = None
+    Table = None
+    RICH_AVAILABLE = False
+
+
+def condition_label(condition: str) -> str:
+    return "MONO" if condition == "mono" else "CC"
+
+
+def make_console():
+    return Console() if RICH_AVAILABLE else None
+
+
+def build_live_renderable(
+    progress,
+    *,
+    total_tasks: int,
+    parallel_runs: int,
+    inflight: dict,
+    run_status: dict,
+    queued_count: int,
+    completed_count: int,
+    failed_count: int,
+    mono_finished: int,
+    cc_finished: int,
+    total_evaluated_games: int,
+    started_at: float,
+    mono_results,
+    cc_results,
+):
+    elapsed = time.time() - started_at
+    summary = Table(title="Ray Training Status")
+    summary.add_column("Metric")
+    summary.add_column("Value", justify="right")
+    summary.add_row("Elapsed", f"{elapsed:.0f}s")
+    summary.add_row("Running", f"{len(inflight)}/{parallel_runs}")
+    summary.add_row("Queued", str(queued_count))
+    summary.add_row("Completed", f"{completed_count}/{total_tasks}")
+    summary.add_row("Failed", str(failed_count))
+    summary.add_row("Finished MONO", str(mono_finished))
+    summary.add_row("Finished CC", str(cc_finished))
+    summary.add_row("Eval Games", f"{total_evaluated_games:,}")
+    summary.add_row(
+        "Cluster Games/s",
+        f"{(total_evaluated_games / elapsed):.1f}" if elapsed > 0 else "0.0",
+    )
+    if mono_results:
+        summary.add_row(
+            "Best MONO",
+            f"{max(result['best_win_rate'] for result in mono_results):.3f}",
+        )
+    if cc_results:
+        summary.add_row(
+            "Best CC",
+            f"{max(result['best_win_rate'] for result in cc_results):.3f}",
+        )
+
+    running = Table(title="Active Runs")
+    running.add_column("Condition")
+    running.add_column("Run")
+    running.add_column("Gen", justify="right")
+    running.add_column("Best", justify="right")
+    running.add_column("Games/s", justify="right")
+    running.add_column("Elapsed", justify="right")
+    if inflight:
+        for condition, run_id, task_started in sorted(
+            inflight.values(), key=lambda item: (item[0], item[1])
+        ):
+            status = run_status.get((condition, run_id), {})
+            run_elapsed = max(0.0, time.time() - task_started)
+            evaluated_games = int(status.get("evaluated_games", 0))
+            games_per_second = (evaluated_games / run_elapsed) if run_elapsed > 0 else 0.0
+            best_win_rate = status.get("best_win_rate")
+            running.add_row(
+                condition_label(condition),
+                f"run_{run_id:03d}",
+                str(status.get("generation", 0)),
+                f"{best_win_rate:.3f}" if best_win_rate is not None else "-",
+                f"{games_per_second:.1f}",
+                f"{run_elapsed:.0f}s",
+            )
+    else:
+        running.add_row("-", "-", "-", "-", "-", "-")
+
+    return Group(
+        Panel(progress, title="Progress", border_style="cyan"),
+        summary,
+        running,
+    )
 
 
 def parse_args():
@@ -47,7 +166,13 @@ def parse_args():
         "--repo-dir",
         type=str,
         default="~/DragonchessAI",
-        help="Repository path on each Ray worker node",
+        help="Legacy worker repo path when using --no-runtime-sync",
+    )
+    parser.add_argument(
+        "--binary-path",
+        type=str,
+        default="build/dragonchess",
+        help="Local dragonchess binary path to include in the Ray runtime package",
     )
     parser.add_argument("--out-mono", type=str, default="results/monolithic/")
     parser.add_argument("--out-cc", type=str, default="results/cc/")
@@ -60,6 +185,11 @@ def parse_args():
         "--local-only",
         action="store_true",
         help="Deprecated; results are always written by the head-side driver.",
+    )
+    parser.add_argument(
+        "--no-runtime-sync",
+        action="store_true",
+        help="Do not stage the repo via Ray runtime_env; expect --repo-dir to exist on workers",
     )
     return parser.parse_args()
 
@@ -99,6 +229,7 @@ def main():
     args = parse_args()
     if args.workers is not None:
         args.parallel_runs = args.workers
+    console = make_console()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out_mono = os.path.join(script_dir, args.out_mono) if not os.path.isabs(args.out_mono) else args.out_mono
@@ -107,6 +238,11 @@ def main():
         os.path.join(script_dir, args.workers_csv)
         if not os.path.isabs(args.workers_csv)
         else args.workers_csv
+    )
+    binary_path = (
+        os.path.join(script_dir, args.binary_path)
+        if not os.path.isabs(args.binary_path)
+        else args.binary_path
     )
     run_ids = [args.run_id_offset + index for index in range(args.runs)]
 
@@ -121,7 +257,14 @@ def main():
     print(f" Parallel runs      : {args.parallel_runs}")
     print(f" Threads/eval       : {args.threads_per_eval}")
     print(f" Workers CSV        : {workers_csv}")
-    print(f" Worker repo dir    : {args.repo_dir}")
+    print(
+        f" Runtime sync       : "
+        f"{'disabled' if args.no_runtime_sync else 'enabled'}"
+    )
+    if args.no_runtime_sync:
+        print(f" Worker repo dir    : {args.repo_dir}")
+    else:
+        print(f" Local binary path  : {binary_path}")
     print(f" Monolithic out     : {out_mono}")
     print(f" CC out             : {out_cc}")
     print(
@@ -146,13 +289,24 @@ def main():
 
     import ray
 
+    runtime_package = None
+    repo_dir_for_workers = args.repo_dir
+    runtime_env = None
+    if not args.no_runtime_sync:
+        runtime_package = stage_runtime_working_dir(
+            script_dir,
+            binary_path=binary_path,
+        )
+        repo_dir_for_workers = None
+        runtime_env = {"working_dir": str(runtime_package.path)}
+
     print(f"\nConnecting to Ray cluster at '{args.address}'...")
-    ray.init(address=args.address)
+    ray.init(address=args.address, runtime_env=runtime_env)
     print(f"Cluster resources: {ray.cluster_resources()}\n")
 
     evaluator_pool = RayEvaluatorPool(
         workers_csv=workers_csv,
-        repo_dir=args.repo_dir,
+        repo_dir=repo_dir_for_workers,
         threads_per_eval=args.threads_per_eval,
     )
     evaluator_pool.start()
@@ -166,6 +320,20 @@ def main():
     started = time.time()
     mono_results = []
     cc_results = []
+    status_lock = threading.Lock()
+
+    def make_progress_callback(condition: str, run_id: int):
+        def _callback(*, generation: int, evaluated_games: int, latest_win_rate: float, best_win_rate: float):
+            with status_lock:
+                status = run_status.get((condition, run_id))
+                if status is None:
+                    return
+                status["generation"] = generation
+                status["evaluated_games"] = evaluated_games
+                status["latest_win_rate"] = latest_win_rate
+                status["best_win_rate"] = best_win_rate
+
+        return _callback
 
     def run_one(condition: str, run_id: int):
         if condition == "mono":
@@ -181,6 +349,7 @@ def main():
                 verbose=False,
                 evaluator=evaluator_pool,
                 threads_per_eval=args.threads_per_eval,
+                progress_callback=make_progress_callback(condition, run_id),
             )
             return condition, run_id, result
 
@@ -196,36 +365,206 @@ def main():
             verbose=False,
             evaluator=evaluator_pool,
             threads_per_eval=args.threads_per_eval,
+            progress_callback=make_progress_callback(condition, run_id),
         )
         return condition, run_id, result
 
     print(f"Launching {len(tasks)} run coordinators...\n")
+    total_tasks = len(tasks)
+    mono_total = sum(1 for condition, _ in tasks if condition == "mono")
+    cc_total = sum(1 for condition, _ in tasks if condition == "cc")
+    completed_count = 0
+    failed_count = 0
+    finished_by_condition = {"mono": 0, "cc": 0}
+    inflight = {}
+    run_status = {}
+    finished_evaluated_games = 0
+    next_task_index = 0
+
+    def submit_next(pool):
+        nonlocal next_task_index
+        while len(inflight) < max(1, args.parallel_runs) and next_task_index < total_tasks:
+            condition, run_id = tasks[next_task_index]
+            next_task_index += 1
+            future = pool.submit(run_one, condition, run_id)
+            inflight[future] = (condition, run_id, time.time())
+            with status_lock:
+                run_status[(condition, run_id)] = {
+                    "generation": 0,
+                    "evaluated_games": 0,
+                    "latest_win_rate": None,
+                    "best_win_rate": None,
+                }
+
+    progress = None
+    overall_task_id = None
+    mono_task_id = None
+    cc_task_id = None
+    if RICH_AVAILABLE:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        )
+        overall_task_id = progress.add_task("Overall", total=total_tasks)
+        mono_task_id = progress.add_task("Monolithic", total=mono_total)
+        cc_task_id = progress.add_task("CC-CMA-ES", total=cc_total)
+
+    def refresh_live(live=None):
+        with status_lock:
+            status_snapshot = {
+                key: value.copy() for key, value in run_status.items()
+            }
+            aggregate_evaluated_games = finished_evaluated_games + sum(
+                int(value.get("evaluated_games", 0)) for value in status_snapshot.values()
+            )
+        if not RICH_AVAILABLE:
+            return
+        progress.update(overall_task_id, completed=completed_count)
+        progress.update(mono_task_id, completed=finished_by_condition["mono"])
+        progress.update(cc_task_id, completed=finished_by_condition["cc"])
+        renderable = build_live_renderable(
+            progress,
+            total_tasks=total_tasks,
+            parallel_runs=max(1, args.parallel_runs),
+            inflight=inflight,
+            run_status=status_snapshot,
+            queued_count=max(0, total_tasks - completed_count - len(inflight)),
+            completed_count=completed_count,
+            failed_count=failed_count,
+            mono_finished=finished_by_condition["mono"],
+            cc_finished=finished_by_condition["cc"],
+            total_evaluated_games=aggregate_evaluated_games,
+            started_at=started,
+            mono_results=mono_results,
+            cc_results=cc_results,
+        )
+        if live is not None:
+            live.update(renderable)
+
     try:
         with ThreadPoolExecutor(max_workers=max(1, args.parallel_runs)) as pool:
-            futures = [pool.submit(run_one, condition, run_id) for condition, run_id in tasks]
-            for future in as_completed(futures):
-                try:
-                    condition, run_id, result = future.result()
-                except Exception as exc:
-                    print(f"[failed] {exc}", flush=True)
-                    continue
+            submit_next(pool)
+            if RICH_AVAILABLE:
+                with progress, Live(
+                    build_live_renderable(
+                        progress,
+                        total_tasks=total_tasks,
+                        parallel_runs=max(1, args.parallel_runs),
+                        inflight=inflight,
+                        run_status={key: value.copy() for key, value in run_status.items()},
+                        queued_count=total_tasks - len(inflight),
+                        completed_count=completed_count,
+                        failed_count=failed_count,
+                        mono_finished=finished_by_condition["mono"],
+                        cc_finished=finished_by_condition["cc"],
+                        total_evaluated_games=0,
+                        started_at=started,
+                        mono_results=mono_results,
+                        cc_results=cc_results,
+                    ),
+                    console=console,
+                    refresh_per_second=4,
+                ) as live:
+                    while inflight:
+                        done, _ = wait(
+                            set(inflight.keys()),
+                            timeout=1.0,
+                            return_when=FIRST_COMPLETED,
+                        )
+                        if not done:
+                            refresh_live(live)
+                            continue
 
-                label = "MONO" if condition == "mono" else "CC"
-                elapsed = time.time() - started
-                print(
-                    f"[{label}] run_{run_id:03d} done  "
-                    f"win_rate={result['best_win_rate']:.3f}  "
-                    f"gen={result['generations']}  "
-                    f"({elapsed:.0f}s)",
-                    flush=True,
-                )
-                if condition == "mono":
-                    mono_results.append(result)
-                else:
-                    cc_results.append(result)
+                        for future in done:
+                            submitted_condition, submitted_run_id, _ = inflight.pop(future)
+                            with status_lock:
+                                status = run_status.pop((submitted_condition, submitted_run_id), None)
+                            finished_evaluated_games += (
+                                int(status.get("evaluated_games", 0)) if status is not None else 0
+                            )
+                            try:
+                                condition, run_id, result = future.result()
+                            except Exception as exc:
+                                failed_count += 1
+                                completed_count += 1
+                                finished_by_condition[submitted_condition] += 1
+                                console.print(
+                                    f"[red][failed][/red] "
+                                    f"{condition_label(submitted_condition)} "
+                                    f"run_{submitted_run_id:03d}: {exc}"
+                                )
+                                continue
+
+                            label = condition_label(condition)
+                            elapsed = time.time() - started
+                            console.print(
+                                f"[green][{label}][/green] run_{run_id:03d} done  "
+                                f"win_rate={result['best_win_rate']:.3f}  "
+                                f"gen={result['generations']}  "
+                                f"({elapsed:.0f}s)"
+                            )
+                            completed_count += 1
+                            finished_by_condition[condition] += 1
+                            if condition == "mono":
+                                mono_results.append(result)
+                            else:
+                                cc_results.append(result)
+
+                        submit_next(pool)
+                        refresh_live(live)
+            else:
+                while inflight:
+                    done, _ = wait(
+                        set(inflight.keys()),
+                        return_when=FIRST_COMPLETED,
+                    )
+                    for future in done:
+                        submitted_condition, submitted_run_id, _ = inflight.pop(future)
+                        with status_lock:
+                            status = run_status.pop((submitted_condition, submitted_run_id), None)
+                        finished_evaluated_games += (
+                            int(status.get("evaluated_games", 0)) if status is not None else 0
+                        )
+                        try:
+                            condition, run_id, result = future.result()
+                        except Exception as exc:
+                            failed_count += 1
+                            completed_count += 1
+                            finished_by_condition[submitted_condition] += 1
+                            print(
+                                f"[failed] {condition_label(submitted_condition)} "
+                                f"run_{submitted_run_id:03d}: {exc}",
+                                flush=True,
+                            )
+                            continue
+
+                        label = condition_label(condition)
+                        elapsed = time.time() - started
+                        print(
+                            f"[{label}] run_{run_id:03d} done  "
+                            f"win_rate={result['best_win_rate']:.3f}  "
+                            f"gen={result['generations']}  "
+                            f"({elapsed:.0f}s)",
+                            flush=True,
+                        )
+                        completed_count += 1
+                        finished_by_condition[condition] += 1
+                        if condition == "mono":
+                            mono_results.append(result)
+                        else:
+                            cc_results.append(result)
+                    submit_next(pool)
     finally:
         evaluator_pool.shutdown()
         ray.shutdown()
+        if runtime_package is not None:
+            runtime_package.cleanup()
 
     total_elapsed = time.time() - started
     print(f"\n{'=' * 60}")

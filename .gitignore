@@ -43,17 +43,17 @@ __pycache__/
 
 # Test output and temporary files
 # *.csv
-*.json
+# *.json
 *.log
 # *.txt
 !CMakeLists.txt
 !examples/tournament_results/.gitkeep
 
-# Research branch: allow experiment results and figures
-!results/
-!results/**
-!figures/
-!figures/**
+# # Research branch: allow experiment results and figures
+# !results/
+# !results/**
+# !figures/
+# !figures/**
 
 # Tournament results (generated data)
 examples/tournament_results/*.csv
