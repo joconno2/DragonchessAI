@@ -13,7 +13,8 @@ static void print_usage(const char* program_name) {
     std::cout << "  " << program_name << " --headless [OPTIONS]\n\n";
 
     std::cout << "HEADLESS MODE OPTIONS:\n";
-    std::cout << "  --mode <match|tournament>  Mode: single match or tournament (default: match)\n";
+    std::cout << "  --mode <match|tournament|selfplay>  Mode (default: match)\n";
+    std::cout << "     selfplay: generate TD training data; outputs NDJSON to stdout\n";
     std::cout << "  --games <N>                Number of games for tournament (default: 100)\n";
     std::cout << "  --threads <N>              Number of threads (default: auto-detect)\n";
     std::cout << "  --max-moves <N>            Maximum moves per game (default: 1000)\n\n";
@@ -34,7 +35,13 @@ static void print_usage(const char* program_name) {
     std::cout << "  greedyvalue                Greedy with piece value evaluation\n";
     std::cout << "  minimax                    Minimax search (specify depth)\n";
     std::cout << "  alphabeta                  Alpha-beta pruning (specify depth)\n";
-    std::cout << "  evolvable                  Weight-driven evaluation AI\n\n";
+    std::cout << "  evolvable                  Piece-value evolved AI (14 weights)\n";
+    std::cout << "  tdeval                     TD-learned feature evaluation (40 weights)\n\n";
+    std::cout << "TD SELF-PLAY OPTIONS (--mode selfplay):\n";
+    std::cout << "  --td-weights <w0,w1,...>   Set both gold and scarlet to tdeval with weights\n";
+    std::cout << "  --gold-td-weights <csv>    Set gold AI to tdeval with given weights\n";
+    std::cout << "  --scarlet-td-weights <csv> Set scarlet AI to tdeval with given weights\n";
+    std::cout << "  --td-depth <N>             Search depth for tdeval (default: 1)\n\n";
 
     std::cout << "OUTPUT OPTIONS:\n";
     std::cout << "  --output-csv <file>        Export results to CSV\n";
@@ -101,6 +108,36 @@ static int run_headless_mode(int argc, char* argv[]) {
             while (std::getline(ss, token, ',')) {
                 scarlet_config.weights.push_back(std::stof(token));
             }
+        } else if (arg == "--td-weights" && i + 1 < argc) {
+            // Set both players to TDEvalAI with the same weights
+            gold_config.type = "tdeval";
+            scarlet_config.type = "tdeval";
+            std::stringstream ss(argv[++i]);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                float v = std::stof(token);
+                gold_config.weights.push_back(v);
+                scarlet_config.weights.push_back(v);
+            }
+        } else if (arg == "--gold-td-weights" && i + 1 < argc) {
+            gold_config.type = "tdeval";
+            std::stringstream ss(argv[++i]);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                gold_config.weights.push_back(std::stof(token));
+            }
+        } else if (arg == "--scarlet-td-weights" && i + 1 < argc) {
+            scarlet_config.type = "tdeval";
+            std::stringstream ss(argv[++i]);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                scarlet_config.weights.push_back(std::stof(token));
+            }
+        } else if (arg == "--td-depth" && i + 1 < argc) {
+            int td_depth = std::atoi(argv[++i]);
+            // Applied after config is fully parsed (see below)
+            gold_config.depth = td_depth;
+            scarlet_config.depth = td_depth;
         } else if (arg == "--output-csv" && i + 1 < argc) {
             output_csv = argv[++i];
         } else if (arg == "--output-json" && i + 1 < argc) {
@@ -119,11 +156,15 @@ static int run_headless_mode(int argc, char* argv[]) {
         }
     }
 
-    if (gold_config.type.empty() || scarlet_config.type.empty()) {
+    // For selfplay mode the AI types default to "tdeval"; other modes need explicit AIs.
+    if (mode != "selfplay" && (gold_config.type.empty() || scarlet_config.type.empty())) {
         std::cerr << "Error: Both --gold-ai and --scarlet-ai are required\n" << std::endl;
         print_usage(argv[0]);
         return 1;
     }
+
+    // Selfplay mode writes pure NDJSON to stdout; suppress all header output.
+    if (mode == "selfplay") quiet = true;
 
     if (!quiet) {
         std::cout << "=== Dragonchess Headless Mode ===" << std::endl;
@@ -140,7 +181,17 @@ static int run_headless_mode(int argc, char* argv[]) {
         std::cout << " [depth: " << scarlet_config.depth << "]" << std::endl;
     }
 
-    if (mode == "match") {
+    if (mode == "selfplay") {
+        // Selfplay mode: generate TD training data, output NDJSON to stdout.
+        // Requires --td-weights (or --gold-td-weights / --scarlet-td-weights).
+        if (gold_config.type.empty())   gold_config.type   = "tdeval";
+        if (scarlet_config.type.empty()) scarlet_config.type = "tdeval";
+        // Default depth 1 for selfplay if not overridden
+        if (gold_config.depth == 2)   gold_config.depth   = 1;
+        if (scarlet_config.depth == 2) scarlet_config.depth = 1;
+        run_selfplay_batch(gold_config, scarlet_config, num_games, num_threads, std::cout);
+        return 0;
+    } else if (mode == "match") {
         if (!quiet) {
             std::cout << "\nRunning single match..." << std::endl;
         }
@@ -173,7 +224,7 @@ static int run_headless_mode(int argc, char* argv[]) {
             export_results_json(results, output_json);
         }
     } else {
-        std::cerr << "Unknown mode: " << mode << " (use 'match' or 'tournament')" << std::endl;
+        std::cerr << "Unknown mode: " << mode << " (use 'match', 'tournament', or 'selfplay')" << std::endl;
         return 1;
     }
 
