@@ -54,4 +54,29 @@ void print_tournament_results(const TournamentResults& results);
 void export_results_csv(const TournamentResults& results, const std::string& filename);
 void export_results_json(const TournamentResults& results, const std::string& filename);
 
+// ---------------------------------------------------------------------------
+// Self-play recording (TD training data generation)
+// ---------------------------------------------------------------------------
+
+// One position sampled during a self-play game.
+// Features are always Gold-positive (see features.h).
+struct PositionRecord {
+    std::vector<float> features;
+};
+
+// Full record for a single self-play game.
+struct GameRecord {
+    float outcome;                       // +1 Gold wins, -1 Scarlet wins, 0 draw
+    std::vector<PositionRecord> positions; // feature snapshot before each half-move
+};
+
+// Play one game and record position features at every half-move.
+GameRecord run_selfplay_game(const AIConfig& gold_config, const AIConfig& scarlet_config,
+                             int max_moves = 500);
+
+// Play num_games games in parallel, write NDJSON game records to `out`.
+// Each line: {"o": <outcome>, "p": [[f0,...,f39], ...]}
+void run_selfplay_batch(const AIConfig& gold_config, const AIConfig& scarlet_config,
+                        int num_games, int num_threads, std::ostream& out);
+
 } // namespace dragonchess

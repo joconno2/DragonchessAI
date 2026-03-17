@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game.h"
+#include "td_features.h"
 #include <optional>
 #include <random>
 #include <unordered_map>
@@ -133,6 +134,20 @@ public:
 
 private:
     std::vector<float> weights;  // 14 evolved piece values
+};
+
+// AlphaBeta AI with a TD-learned feature-weight evaluation function.
+// Uses a NUM_TD_FEATURES-dimensional weight vector; evaluation is the dot
+// product of extract_td_features(game) with the weight vector.
+// Features are Gold-positive; the sign is flipped internally for Scarlet.
+class TDEvalAI : public AlphaBetaAI {
+public:
+    TDEvalAI(Game& game, Color color, const std::vector<float>& weights, int depth = 1);
+
+    float evaluate_material(const Game& g) const override;
+
+private:
+    std::vector<float> weights;  // NUM_TD_FEATURES learned weights
 };
 
 } // namespace dragonchess

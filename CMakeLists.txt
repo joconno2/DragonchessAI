@@ -19,6 +19,7 @@ if(HEADLESS_ONLY)
         src/moves.cpp
         src/game.cpp
         src/ai.cpp
+        src/td_features.cpp
         src/headless.cpp
         src/simple_ai.cpp
         src/ai_plugin.cpp
@@ -36,6 +37,7 @@ else()
         src/moves.cpp
         src/game.cpp
         src/ai.cpp
+        src/td_features.cpp
         src/renderer.cpp
         src/input.cpp
         src/menu.cpp
@@ -68,4 +70,5 @@ add_executable(test_dragonchess
     src/moves.cpp
     src/game.cpp
     src/ai.cpp
+    src/td_features.cpp
 )

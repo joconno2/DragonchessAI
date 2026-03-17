@@ -64,3 +64,10 @@ examples/tournament_results/*.md
 python_backup_*/
 
 temp
+
+# Local session/research data — not for release
+.claude/
+memory/
+results/td/
+workers.csv
+COMMIT_MESSAGE.txt

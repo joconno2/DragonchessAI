@@ -492,4 +492,22 @@ float EvolvableAI::evaluate_material(const Game& g) const {
     return score;
 }
 
+// ===== TDEvalAI =====
+TDEvalAI::TDEvalAI(Game& game, Color color, const std::vector<float>& weights, int depth)
+    : AlphaBetaAI(game, color, depth)
+    , weights(weights)
+{
+}
+
+float TDEvalAI::evaluate_material(const Game& g) const {
+    const std::vector<float> features = extract_td_features(g);
+    float score = 0.0f;
+    int n = static_cast<int>(std::min(features.size(), weights.size()));
+    for (int i = 0; i < n; ++i)
+        score += weights[i] * features[i];
+    // Features are Gold-positive; flip for Scarlet so the maximizer always
+    // maximizes from its own perspective (matching BaseAI convention).
+    return (color == Color::GOLD) ? score : -score;
+}
+
 } // namespace dragonchess
