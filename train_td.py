@@ -61,6 +61,7 @@ BINARY = Path(__file__).parent / "build" / "dragonchess"
 N_FEATURES = 40
 CHECKPOINT_PREFIX = "ckpt_"
 LATEST_NAME = "latest.json"
+BEST_NAME = "best.json"
 LOCK_NAME = ".train_td.lock"
 
 logging.basicConfig(
@@ -148,18 +149,37 @@ def generate_games_local(
     n_threads: int,
     td_depth: int,
     timeout_s: float = 600.0,
+    opponent_weights: np.ndarray | None = None,
 ) -> str:
-    """Run the C++ binary in selfplay mode and return raw NDJSON output."""
-    csv = _weights_to_csv(weights)
-    cmd = [
-        str(binary), "--headless",
-        "--mode", "selfplay",
-        "--td-weights", csv,
-        "--games", str(n_games),
-        "--threads", str(n_threads),
-        "--td-depth", str(td_depth),
-        "--quiet",
-    ]
+    """Run the C++ binary in selfplay mode and return raw NDJSON output.
+
+    If opponent_weights is provided, Gold uses `weights` and Scarlet uses
+    `opponent_weights` (mixed-opponent training).
+    """
+    if opponent_weights is not None:
+        gold_csv = _weights_to_csv(weights)
+        scarlet_csv = _weights_to_csv(opponent_weights)
+        cmd = [
+            str(binary), "--headless",
+            "--mode", "selfplay",
+            "--gold-td-weights", gold_csv,
+            "--scarlet-td-weights", scarlet_csv,
+            "--games", str(n_games),
+            "--threads", str(n_threads),
+            "--td-depth", str(td_depth),
+            "--quiet",
+        ]
+    else:
+        csv = _weights_to_csv(weights)
+        cmd = [
+            str(binary), "--headless",
+            "--mode", "selfplay",
+            "--td-weights", csv,
+            "--games", str(n_games),
+            "--threads", str(n_threads),
+            "--td-depth", str(td_depth),
+            "--quiet",
+        ]
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -363,6 +383,13 @@ class TDTrainer:
         ray_workers: int = 4,
         ray_games_per_worker: int = 50,
         timeout_s: float = 600.0,
+        # Mixed-opponent training
+        mixed_frac: float = 0.0,
+        snapshot_every: int = 50,
+        snapshot_keep: int = 10,
+        # Early stopping
+        early_stop_patience: int = 0,
+        early_stop_threshold: float = 0.15,
     ):
         self.out_dir = out_dir
         self.binary = binary
@@ -382,6 +409,16 @@ class TDTrainer:
         self.ray_games_per_worker = ray_games_per_worker
         self.timeout_s = timeout_s
 
+        # Mixed-opponent training
+        self.mixed_frac = mixed_frac
+        self.snapshot_every = snapshot_every
+        self.snapshot_keep = snapshot_keep
+        self._snapshots: list[np.ndarray] = []
+
+        # Early stopping
+        self.early_stop_patience = early_stop_patience
+        self.early_stop_threshold = early_stop_threshold
+
         # State (overwritten by load_or_init)
         self.weights: np.ndarray = np.zeros(N_FEATURES)
         self.adagrad_G: np.ndarray = np.full(N_FEATURES, 1e-8)
@@ -389,6 +426,8 @@ class TDTrainer:
         self.total_batches: int = 0
         self.win_rate_history: list[dict] = []
         self.elapsed_seconds: float = 0.0
+        self.best_win_rate: float = 0.0
+        self.best_batch: int = 0
         self._session_start = time.time()
         self._shutdown_requested = False
 
@@ -412,10 +451,19 @@ class TDTrainer:
             self.total_batches = ckpt.get("total_batches", 0)
             self.win_rate_history = ckpt.get("win_rate_history", [])
             self.elapsed_seconds = ckpt.get("elapsed_seconds", 0.0)
+            self.best_win_rate = ckpt.get("best_win_rate", 0.0)
+            self.best_batch = ckpt.get("best_batch", 0)
+            # Recompute best from history if not stored
+            if self.best_win_rate == 0.0 and self.win_rate_history:
+                best_entry = max(self.win_rate_history, key=lambda e: e["win_rate_vs_ab"])
+                self.best_win_rate = best_entry["win_rate_vs_ab"]
+                self.best_batch = best_entry["batch"]
             log.info(
                 "Resumed from checkpoint: %d batches, %d games, "
-                "elapsed %.0fs",
-                self.total_batches, self.total_games, self.elapsed_seconds,
+                "best WR %.1f%% @ batch %d, elapsed %.0fs",
+                self.total_batches, self.total_games,
+                self.best_win_rate * 100, self.best_batch,
+                self.elapsed_seconds,
             )
         else:
             if self.warm_start:
@@ -458,6 +506,8 @@ class TDTrainer:
             "elapsed_seconds": self.elapsed_seconds + (
                 time.time() - self._session_start
             ),
+            "best_win_rate": self.best_win_rate,
+            "best_batch": self.best_batch,
             "config": {
                 "lambda": self.lambd,
                 "gamma": self.gamma,
@@ -465,16 +515,71 @@ class TDTrainer:
                 "td_depth": self.td_depth,
                 "games_per_batch": self.games_per_batch,
                 "eval_ab_depth": self.eval_ab_depth,
+                "mixed_frac": self.mixed_frac,
             },
         }
         path = save_checkpoint(self.out_dir, self.weights, self.adagrad_G, meta)
         log.debug("Checkpoint saved → %s", path.name)
 
+    def save_best(self, win_rate: float) -> None:
+        """Save best.json if this is a new best win rate."""
+        if win_rate <= self.best_win_rate:
+            return
+        self.best_win_rate = win_rate
+        self.best_batch = self.total_batches
+        best_data = {
+            "version": 2,
+            "timestamp_utc": _utc_now(),
+            "weights": self.weights.tolist(),
+            "adagrad_G": self.adagrad_G.tolist(),
+            "n_features": N_FEATURES,
+            "total_games": self.total_games,
+            "total_batches": self.total_batches,
+            "best_win_rate": win_rate,
+            "best_batch": self.total_batches,
+            "elapsed_seconds": self.elapsed_seconds + (
+                time.time() - self._session_start
+            ),
+            "config": {
+                "lambda": self.lambd,
+                "gamma": self.gamma,
+                "lr": self.lr,
+                "td_depth": self.td_depth,
+                "games_per_batch": self.games_per_batch,
+                "eval_ab_depth": self.eval_ab_depth,
+                "mixed_frac": self.mixed_frac,
+            },
+        }
+        _atomic_write(
+            self.out_dir / BEST_NAME,
+            json.dumps(best_data, indent=2),
+        )
+        log.info("  ★ New best WR: %.1f%% @ batch %d → best.json", win_rate * 100, self.total_batches)
+
     # ------------------------------------------------------------------
     # Game generation
     # ------------------------------------------------------------------
 
-    def _generate_batch_local(self) -> list[dict]:
+    def _maybe_save_snapshot(self) -> None:
+        """Save a frozen weight snapshot for mixed-opponent training."""
+        if self.mixed_frac <= 0:
+            return
+        if self.total_batches > 0 and self.total_batches % self.snapshot_every == 0:
+            self._snapshots.append(self.weights.copy())
+            if len(self._snapshots) > self.snapshot_keep:
+                self._snapshots.pop(0)
+            log.debug("Saved opponent snapshot (%d stored).", len(self._snapshots))
+
+    def _pick_opponent_weights(self) -> np.ndarray | None:
+        """Return frozen snapshot weights for mixed-opponent batch, or None for self-play."""
+        if self.mixed_frac <= 0 or not self._snapshots:
+            return None
+        if np.random.random() < self.mixed_frac:
+            idx = np.random.randint(len(self._snapshots))
+            return self._snapshots[idx]
+        return None
+
+    def _generate_batch_local(self, opponent_weights: np.ndarray | None = None) -> list[dict]:
         """Generate games_per_batch games locally, retrying once on failure."""
         for attempt in range(2):
             try:
@@ -485,6 +590,7 @@ class TDTrainer:
                     self.workers * self.threads_per_worker,
                     self.td_depth,
                     self.timeout_s,
+                    opponent_weights=opponent_weights,
                 )
                 records = parse_game_records(ndjson)
                 if records:
@@ -514,22 +620,47 @@ class TDTrainer:
         return records
 
     def generate_batch(self) -> list[dict]:
+        opponent = self._pick_opponent_weights()
         if self.ray_mode:
             return self._generate_batch_ray()
-        return self._generate_batch_local()
+        return self._generate_batch_local(opponent_weights=opponent)
 
     # ------------------------------------------------------------------
     # Main training loop
     # ------------------------------------------------------------------
 
+    def _check_early_stop(self) -> bool:
+        """Return True if training should stop due to draw-collapse."""
+        if self.early_stop_patience <= 0 or self.best_batch == 0:
+            return False
+        batches_since_best = self.total_batches - self.best_batch
+        if batches_since_best < self.early_stop_patience:
+            return False
+        # Check recent WR is below threshold relative to best
+        recent = [e for e in self.win_rate_history[-10:] if not math.isnan(e["win_rate_vs_ab"])]
+        if not recent:
+            return False
+        recent_avg = sum(e["win_rate_vs_ab"] for e in recent) / len(recent)
+        if self.best_win_rate - recent_avg > self.early_stop_threshold:
+            log.warning(
+                "EARLY STOP: %d batches since best (%.1f%% @ %d), "
+                "recent avg %.1f%% — collapse detected.",
+                batches_since_best, self.best_win_rate * 100,
+                self.best_batch, recent_avg * 100,
+            )
+            return True
+        return False
+
     def train(self, max_batches: int | None = None, max_seconds: float | None = None) -> None:
         self.load_or_init()
         self._session_start = time.time()
+        mixed_str = f"  mixed_frac={self.mixed_frac:.0%}" if self.mixed_frac > 0 else ""
+        estop_str = f"  early_stop={self.early_stop_patience}" if self.early_stop_patience > 0 else ""
         log.info(
             "Training: λ=%.2f  γ=%.2f  lr=%.4f  depth=%d  "
-            "games/batch=%d  eval_every=%d",
+            "games/batch=%d  eval_every=%d%s%s",
             self.lambd, self.gamma, self.lr, self.td_depth,
-            self.games_per_batch, self.eval_every,
+            self.games_per_batch, self.eval_every, mixed_str, estop_str,
         )
 
         batch = 0
@@ -544,7 +675,10 @@ class TDTrainer:
 
             t_batch = time.time()
 
-            # 1. Generate self-play games
+            # 0. Save snapshot for mixed-opponent training
+            self._maybe_save_snapshot()
+
+            # 1. Generate games (self-play or mixed-opponent)
             records = self.generate_batch()
             if not records:
                 log.warning("Batch %d: no records returned — skipping.", self.total_batches)
@@ -564,12 +698,13 @@ class TDTrainer:
 
             log.info(
                 "Batch %4d | games %6d | positions %6d | "
-                "RMSE %.4f | gold_wr %.3f | %.0fms",
+                "RMSE %.4f | gold_wr %.3f | draw %.3f | %.0fms",
                 self.total_batches,
                 stats["n_games"],
                 stats["total_positions"],
                 stats["rmse"],
                 stats["gold_win_rate"],
+                stats["draw_rate"],
                 batch_ms,
             )
 
@@ -592,9 +727,17 @@ class TDTrainer:
                     "ab_depth": self.eval_ab_depth,
                 })
                 log.info(
-                    "  → Win rate vs AlphaBeta(depth=%d): %.3f",
-                    self.eval_ab_depth, wr,
+                    "  → Win rate vs AB(d=%d): %.1f%%  (best: %.1f%% @ batch %d)",
+                    self.eval_ab_depth, wr * 100,
+                    self.best_win_rate * 100, self.best_batch,
                 )
+
+                # Save best checkpoint if improved
+                self.save_best(wr)
+
+                # Check early stopping
+                if self._check_early_stop():
+                    break
 
             # 4. Checkpoint after every batch (atomic write, fast)
             self.checkpoint()
@@ -602,8 +745,10 @@ class TDTrainer:
         # Final checkpoint on exit
         self.checkpoint()
         log.info(
-            "Done. Total batches: %d  Total games: %d",
+            "Done. Total batches: %d  Total games: %d  "
+            "Best WR: %.1f%% @ batch %d",
             self.total_batches, self.total_games,
+            self.best_win_rate * 100, self.best_batch,
         )
 
 
@@ -705,6 +850,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--timeout", type=float, default=600.0,
                    help="Timeout in seconds for each C++ subprocess call")
 
+    # Mixed-opponent training
+    p.add_argument("--mixed-frac", type=float, default=0.0,
+                   help="Fraction of batches played vs frozen snapshot opponent "
+                        "(0 = pure self-play, 0.3 = 30%% mixed)")
+    p.add_argument("--snapshot-every", type=int, default=50,
+                   help="Save a weight snapshot every N batches for mixed-opponent pool")
+    p.add_argument("--snapshot-keep", type=int, default=10,
+                   help="Number of past snapshots to keep in the opponent pool")
+
+    # Early stopping
+    p.add_argument("--early-stop-patience", type=int, default=0,
+                   help="Stop if no WR improvement for this many batches (0 = disabled)")
+    p.add_argument("--early-stop-threshold", type=float, default=0.15,
+                   help="Stop when best_wr - recent_avg_wr exceeds this (default 0.15)")
+
     return p.parse_args()
 
 
@@ -748,6 +908,11 @@ def main() -> None:
             ray_workers=args.ray_workers,
             ray_games_per_worker=args.ray_games_per_worker,
             timeout_s=args.timeout,
+            mixed_frac=args.mixed_frac,
+            snapshot_every=args.snapshot_every,
+            snapshot_keep=args.snapshot_keep,
+            early_stop_patience=args.early_stop_patience,
+            early_stop_threshold=args.early_stop_threshold,
         )
         max_seconds = args.max_hours * 3600 if args.max_hours is not None else None
         trainer.train(max_batches=args.max_batches, max_seconds=max_seconds)

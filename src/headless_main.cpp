@@ -64,6 +64,7 @@ static int run_headless_mode(int argc, char* argv[]) {
     AIConfig scarlet_config;
     gold_config.depth = 2;
     scarlet_config.depth = 2;
+    bool td_depth_set = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -135,9 +136,9 @@ static int run_headless_mode(int argc, char* argv[]) {
             }
         } else if (arg == "--td-depth" && i + 1 < argc) {
             int td_depth = std::atoi(argv[++i]);
-            // Applied after config is fully parsed (see below)
             gold_config.depth = td_depth;
             scarlet_config.depth = td_depth;
+            td_depth_set = true;
         } else if (arg == "--output-csv" && i + 1 < argc) {
             output_csv = argv[++i];
         } else if (arg == "--output-json" && i + 1 < argc) {
@@ -186,9 +187,11 @@ static int run_headless_mode(int argc, char* argv[]) {
         // Requires --td-weights (or --gold-td-weights / --scarlet-td-weights).
         if (gold_config.type.empty())   gold_config.type   = "tdeval";
         if (scarlet_config.type.empty()) scarlet_config.type = "tdeval";
-        // Default depth 1 for selfplay if not overridden
-        if (gold_config.depth == 2)   gold_config.depth   = 1;
-        if (scarlet_config.depth == 2) scarlet_config.depth = 1;
+        // Default depth 1 for selfplay only if --td-depth was NOT explicitly set
+        if (!td_depth_set) {
+            gold_config.depth   = 1;
+            scarlet_config.depth = 1;
+        }
         run_selfplay_batch(gold_config, scarlet_config, num_games, num_threads, std::cout);
         return 0;
     } else if (mode == "match") {
