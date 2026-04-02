@@ -1,0 +1,170 @@
+{
+  "eval_depth": 3,
+  "games_per_matchup": 20,
+  "mono": [
+    {
+      "vs_greedy": 0.6,
+      "vs_jackman": 0.5,
+      "vs_jackman_d2": 0.7,
+      "run_id": 0
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.35,
+      "vs_jackman_d2": 0.45,
+      "run_id": 1
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.75,
+      "vs_jackman_d2": 0.7,
+      "run_id": 2
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.25,
+      "vs_jackman_d2": 0.5,
+      "run_id": 3
+    },
+    {
+      "vs_greedy": 0.8,
+      "vs_jackman": 0.3,
+      "vs_jackman_d2": 0.6,
+      "run_id": 4
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.6,
+      "vs_jackman_d2": 0.65,
+      "run_id": 5
+    },
+    {
+      "vs_greedy": 0.75,
+      "vs_jackman": 0.5,
+      "vs_jackman_d2": 0.55,
+      "run_id": 6
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.5,
+      "vs_jackman_d2": 0.75,
+      "run_id": 7
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.3,
+      "vs_jackman_d2": 0.5,
+      "run_id": 8
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.45,
+      "vs_jackman_d2": 0.6,
+      "run_id": 9
+    },
+    {
+      "vs_greedy": 0.45,
+      "vs_jackman": 0.5,
+      "vs_jackman_d2": 0.55,
+      "run_id": 10
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.6,
+      "vs_jackman_d2": 0.5,
+      "run_id": 11
+    },
+    {
+      "vs_greedy": 0.6,
+      "vs_jackman": 0.3,
+      "vs_jackman_d2": 0.5,
+      "run_id": 12
+    },
+    {
+      "vs_greedy": 0.75,
+      "vs_jackman": 0.65,
+      "vs_jackman_d2": 0.75,
+      "run_id": 13
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.45,
+      "vs_jackman_d2": 0.55,
+      "run_id": 14
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.75,
+      "vs_jackman_d2": 0.7,
+      "run_id": 15
+    },
+    {
+      "vs_greedy": 0.5,
+      "vs_jackman": 0.6,
+      "vs_jackman_d2": 0.55,
+      "run_id": 16
+    },
+    {
+      "vs_greedy": 0.65,
+      "vs_jackman": 0.45,
+      "vs_jackman_d2": 0.6,
+      "run_id": 17
+    },
+    {
+      "vs_greedy": 0.7,
+      "vs_jackman": 0.4,
+      "vs_jackman_d2": 0.8,
+      "run_id": 18
+    },
+    {
+      "vs_greedy": 0.6,
+      "vs_jackman": 0.4,
+      "vs_jackman_d2": 0.6,
+      "run_id": 19
+    }
+  ],
+  "cc": [
+    {
+      "vs_greedy": 0.5,
+      "vs_jackman": 0.35,
+      "vs_jackman_d2": 0.7,
+      "run_id": 0
+    },
+    {
+      "vs_greedy": 0.65,
+      "vs_jackman": 0.55,
+      "vs_jackman_d2": 0.7,
+      "run_id": 1
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.6,
+      "vs_jackman_d2": 0.55,
+      "run_id": 2
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.45,
+      "vs_jackman_d2": 0.65,
+      "run_id": 3
+    },
+    {
+      "vs_greedy": 0.6,
+      "vs_jackman": 0.5,
+      "vs_jackman_d2": 0.5,
+      "run_id": 4
+    },
+    {
+      "vs_greedy": 0.45,
+      "vs_jackman": 0.45,
+      "vs_jackman_d2": 0.65,
+      "run_id": 5
+    },
+    {
+      "vs_greedy": 0.55,
+      "vs_jackman": 0.35,
+      "vs_jackman_d2": 0.5,
+      "run_id": 6
+    }
+  ]
+}
