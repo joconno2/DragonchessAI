@@ -1,5 +1,6 @@
 #include "headless.h"
 #include "ai_plugin.h"
+#include "td_features.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -7,6 +8,7 @@
 #include <atomic>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <algorithm>
 
 namespace dragonchess {
@@ -51,6 +53,17 @@ std::unique_ptr<BaseAI> create_ai(const AIConfig& config, Game& game, Color colo
         return std::make_unique<AlphaBetaAI>(game, color, config.depth);
     } else if (type_lower == "evolvable") {
         return std::make_unique<EvolvableAI>(game, color, config.weights, config.depth);
+    } else if (type_lower == "tdeval") {
+        return std::make_unique<TDEvalAI>(game, color, config.weights, config.depth);
+    } else if (type_lower == "nneval") {
+        NNWeights nn;
+        if (!nn.from_flat(config.weights)) {
+            std::cerr << "nneval: expected " << NNWeights::total_params()
+                      << " weights, got " << config.weights.size()
+                      << ". Falling back to RandomAI." << std::endl;
+            return std::make_unique<RandomAI>(game, color);
+        }
+        return std::make_unique<NNEvalAI>(game, color, nn, config.depth);
     } else {
         std::cerr << "Unknown AI type: " << config.type << ", defaulting to RandomAI" << std::endl;
         return std::make_unique<RandomAI>(game, color);
@@ -335,6 +348,259 @@ void export_results_json(const TournamentResults& results, const std::string& fi
     write_results_json(file, results);
     file.close();
     std::cout << "Results exported to " << filename << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// Self-play recording
+// ---------------------------------------------------------------------------
+
+GameRecord run_selfplay_game(const AIConfig& gold_config, const AIConfig& scarlet_config,
+                             int max_moves) {
+    Game game;
+    auto gold_ai    = create_ai(gold_config,    game, Color::GOLD);
+    auto scarlet_ai = create_ai(scarlet_config, game, Color::SCARLET);
+
+    // Try to use TDLeaf if AIs support it (TDEvalAI or NNEvalAI)
+    auto* gold_td = dynamic_cast<TDEvalAI*>(gold_ai.get());
+    auto* scarlet_td = dynamic_cast<TDEvalAI*>(scarlet_ai.get());
+    auto* gold_nn = dynamic_cast<NNEvalAI*>(gold_ai.get());
+    auto* scarlet_nn = dynamic_cast<NNEvalAI*>(scarlet_ai.get());
+
+    GameRecord record;
+    int moves_without_progress = 0;
+    const int MAX_NO_PROGRESS = 100;
+
+    while (!game.game_over && static_cast<int>(game.game_log.size()) < max_moves) {
+        std::optional<Move> move;
+
+        if (game.current_turn == Color::GOLD) {
+            if (gold_nn) {
+                auto result = gold_nn->choose_move_tdleaf();
+                record.positions.push_back({std::move(result.leaf_features)});
+                move = result.move;
+            } else if (gold_td) {
+                auto result = gold_td->choose_move_tdleaf();
+                record.positions.push_back({std::move(result.leaf_features)});
+                move = result.move;
+            } else {
+                record.positions.push_back({extract_td_features_sparse(game)});
+                move = gold_ai->choose_move();
+            }
+        } else {
+            if (scarlet_nn) {
+                auto result = scarlet_nn->choose_move_tdleaf();
+                record.positions.push_back({std::move(result.leaf_features)});
+                move = result.move;
+            } else if (scarlet_td) {
+                auto result = scarlet_td->choose_move_tdleaf();
+                record.positions.push_back({std::move(result.leaf_features)});
+                move = result.move;
+            } else {
+                record.positions.push_back({extract_td_features_sparse(game)});
+                move = scarlet_ai->choose_move();
+            }
+        }
+
+        if (!move.has_value()) {
+            game.game_over = true;
+            game.winner = "Draw";
+            break;
+        }
+
+        game.make_move(move.value());
+        game.update();
+
+        if (game.no_capture_count == 0)
+            moves_without_progress = 0;
+        else
+            ++moves_without_progress;
+
+        if (moves_without_progress >= MAX_NO_PROGRESS) {
+            game.game_over = true;
+            game.winner = "Draw";
+            break;
+        }
+    }
+
+    if (!game.game_over) {
+        game.game_over = true;
+        game.winner = "Draw";
+    }
+
+    if (game.winner == "Gold")
+        record.outcome = 1.0f;
+    else if (game.winner == "Scarlet")
+        record.outcome = -1.0f;
+    else
+        record.outcome = 0.0f;
+
+    return record;
+}
+
+// Serialize one GameRecord as a compact JSON line (sparse format).
+// Format: {"o":<outcome>,"p":[{"i":[idx,...],"v":[val,...]}, ...]}
+static std::string game_record_to_json(const GameRecord& rec) {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(5);
+    ss << "{\"o\":" << rec.outcome << ",\"p\":[";
+    for (size_t pi = 0; pi < rec.positions.size(); ++pi) {
+        if (pi > 0) ss << ',';
+        const auto& feat = rec.positions[pi].features;
+        ss << "{\"i\":[";
+        for (size_t fi = 0; fi < feat.size(); ++fi) {
+            if (fi > 0) ss << ',';
+            ss << feat[fi].index;
+        }
+        ss << "],\"v\":[";
+        for (size_t fi = 0; fi < feat.size(); ++fi) {
+            if (fi > 0) ss << ',';
+            ss << feat[fi].value;
+        }
+        ss << "]}";
+    }
+    ss << "]}";
+    return ss.str();
+}
+
+void run_selfplay_batch(const AIConfig& gold_config, const AIConfig& scarlet_config,
+                        int num_games, int num_threads, std::ostream& out) {
+    if (num_threads <= 0) {
+        num_threads = static_cast<int>(std::thread::hardware_concurrency());
+        if (num_threads == 0) num_threads = 4;
+    }
+
+    std::vector<GameRecord> records(static_cast<size_t>(num_games));
+    std::vector<std::thread> threads;
+    std::atomic<int> next_game{0};
+
+    auto worker = [&]() {
+        for (;;) {
+            int idx = next_game.fetch_add(1);
+            if (idx >= num_games) break;
+            records[static_cast<size_t>(idx)] =
+                run_selfplay_game(gold_config, scarlet_config);
+        }
+    };
+
+    int nw = std::min(num_threads, num_games);
+    threads.reserve(static_cast<size_t>(nw));
+    for (int i = 0; i < nw; ++i)
+        threads.emplace_back(worker);
+    for (auto& t : threads)
+        t.join();
+
+    // Write NDJSON — one game per line, serial to preserve ordering
+    for (const auto& rec : records)
+        out << game_record_to_json(rec) << '\n';
+}
+
+// ---------------------------------------------------------------------------
+// Search-supervised label generation
+// ---------------------------------------------------------------------------
+
+// Generate labeled positions from one game.
+// First random_plies moves are random for opening diversity,
+// then AB(d=1) plays out the rest. At every position, AB(label_depth) with
+// the handcrafted eval scores the position from Gold's perspective.
+static std::vector<LabeledPosition> generate_labeled_game(
+    int label_depth, int random_plies, int max_moves, std::mt19937& rng)
+{
+    Game game;
+    // Labeler uses handcrafted eval at deep search for ground truth
+    AlphaBetaAI labeler(game, Color::GOLD);
+
+    AlphaBetaAI playout_gold(game, Color::GOLD);
+    playout_gold.set_max_depth(1);
+    AlphaBetaAI playout_scarlet(game, Color::SCARLET);
+    playout_scarlet.set_max_depth(1);
+
+    std::vector<LabeledPosition> positions;
+    int no_progress = 0;
+
+    for (int ply = 0; ply < max_moves && !game.game_over; ++ply) {
+        // Extract features and label with deep search
+        auto features = extract_td_features_sparse(game);
+        Game label_copy = game;
+        float score = labeler.search_score(label_copy, label_depth);
+        positions.push_back({std::move(features), score});
+
+        // Choose move: random for opening diversity, then AB(d=1)
+        std::optional<Move> move;
+        auto moves = game.get_all_moves();
+        if (moves.empty()) break;
+
+        if (ply < random_plies) {
+            std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
+            move = moves[dist(rng)];
+        } else if (game.current_turn == Color::GOLD) {
+            move = playout_gold.choose_move();
+        } else {
+            move = playout_scarlet.choose_move();
+        }
+
+        if (!move.has_value()) break;
+        game.make_move(move.value());
+        game.update();
+
+        if (game.no_capture_count == 0) no_progress = 0;
+        else ++no_progress;
+        if (no_progress >= 100) break;
+    }
+    return positions;
+}
+
+// Serialize one LabeledPosition as JSON.
+static std::string labeled_pos_to_json(const LabeledPosition& lp) {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(5);
+    ss << "{\"i\":[";
+    for (size_t i = 0; i < lp.features.size(); ++i) {
+        if (i > 0) ss << ',';
+        ss << lp.features[i].index;
+    }
+    ss << "],\"v\":[";
+    for (size_t i = 0; i < lp.features.size(); ++i) {
+        if (i > 0) ss << ',';
+        ss << lp.features[i].value;
+    }
+    ss << "],\"s\":" << lp.search_score << "}";
+    return ss.str();
+}
+
+void run_genlabels_batch(int num_games, int label_depth, int random_plies,
+                         int num_threads, std::ostream& out) {
+    if (num_threads <= 0) {
+        num_threads = static_cast<int>(std::thread::hardware_concurrency());
+        if (num_threads == 0) num_threads = 4;
+    }
+
+    std::vector<std::vector<LabeledPosition>> all_positions(
+        static_cast<size_t>(num_games));
+    std::atomic<int> next_game{0};
+
+    auto worker = [&](unsigned seed) {
+        std::mt19937 rng(seed);
+        for (;;) {
+            int idx = next_game.fetch_add(1);
+            if (idx >= num_games) break;
+            all_positions[static_cast<size_t>(idx)] =
+                generate_labeled_game(label_depth, random_plies, 300, rng);
+        }
+    };
+
+    int nw = std::min(num_threads, num_games);
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<size_t>(nw));
+    std::mt19937 seed_rng(std::random_device{}());
+    for (int i = 0; i < nw; ++i)
+        threads.emplace_back(worker, seed_rng());
+    for (auto& t : threads)
+        t.join();
+
+    // Write one position per line
+    for (const auto& game_positions : all_positions)
+        for (const auto& lp : game_positions)
+            out << labeled_pos_to_json(lp) << '\n';
 }
 
 } // namespace dragonchess

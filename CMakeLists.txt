@@ -9,39 +9,57 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native")
 endif()
 
-find_package(SDL2 REQUIRED)
-find_package(SDL2_image REQUIRED)
-find_package(SDL2_ttf REQUIRED)
+option(HEADLESS_ONLY "Build headless binary only (no GUI)" OFF)
 
-include_directories(
-    ${CMAKE_SOURCE_DIR}/src
-    ${SDL2_INCLUDE_DIRS}
-)
+include_directories(${CMAKE_SOURCE_DIR}/src)
 
-set(SOURCES
-    src/main.cpp
-    src/bitboard.cpp
-    src/moves.cpp
-    src/game.cpp
-    src/ai.cpp
-    src/renderer.cpp
-    src/input.cpp
-    src/menu.cpp
-    src/tournament.cpp
-    src/campaign.cpp
-    src/headless.cpp
-    src/simple_ai.cpp
-    src/ai_plugin.cpp
-)
+if(HEADLESS_ONLY)
+    set(SOURCES
+        src/headless_main.cpp
+        src/bitboard.cpp
+        src/moves.cpp
+        src/game.cpp
+        src/ai.cpp
+        src/td_features.cpp
+        src/headless.cpp
+        src/simple_ai.cpp
+        src/ai_plugin.cpp
+    )
 
-add_executable(dragonchess ${SOURCES})
+    add_executable(dragonchess ${SOURCES})
+    target_link_libraries(dragonchess dl pthread)
 
-target_link_libraries(dragonchess
-    ${SDL2_LIBRARIES}
-    SDL2_image::SDL2_image
-    SDL2_ttf::SDL2_ttf
-    dl  # For plugin loading
-)
+else()
+    find_package(SDL2 REQUIRED)
+    find_package(SDL2_image REQUIRED)
+    find_package(SDL2_ttf REQUIRED)
+    include_directories(${SDL2_INCLUDE_DIRS})
+
+    set(SOURCES
+        src/main.cpp
+        src/bitboard.cpp
+        src/moves.cpp
+        src/game.cpp
+        src/ai.cpp
+        src/td_features.cpp
+        src/renderer.cpp
+        src/input.cpp
+        src/menu.cpp
+        src/tournament.cpp
+        src/campaign.cpp
+        src/headless.cpp
+        src/simple_ai.cpp
+        src/ai_plugin.cpp
+    )
+
+    add_executable(dragonchess ${SOURCES})
+    target_link_libraries(dragonchess
+        ${SDL2_LIBRARIES}
+        SDL2_image::SDL2_image
+        SDL2_ttf::SDL2_ttf
+        dl
+    )
+endif()
 
 add_executable(test_dragonchess
     src/test_game.cpp
@@ -49,4 +67,6 @@ add_executable(test_dragonchess
     src/moves.cpp
     src/game.cpp
     src/ai.cpp
+    src/td_features.cpp
 )
+target_link_libraries(test_dragonchess pthread)

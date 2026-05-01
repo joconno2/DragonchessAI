@@ -335,7 +335,7 @@ AlphaBetaAI::EvalResult AlphaBetaAI::alphabeta(Game& game_copy, int depth,
     if (depth == 0 || moves.empty() || game_copy.game_over) {
         float score = evaluate_material(game_copy);
         transposition_table[hash] = {score, depth};
-        return {score, std::nullopt};
+        return {score, std::nullopt, {}};
     }
     
     // Limit branching factor for speed
@@ -368,69 +368,92 @@ AlphaBetaAI::EvalResult AlphaBetaAI::alphabeta(Game& game_copy, int depth,
     if (maximizing) {
         float best_score = -std::numeric_limits<float>::infinity();
         std::optional<Move> best_move;
+        std::vector<Move> best_pv;
         std::vector<Move> best_moves;
+        std::vector<std::vector<Move>> best_pvs;
 
         for (size_t i = 0; i < max_moves; ++i) {
             const auto& move = moves[i];
-            game_copy.make_move(move);   // make/unmake: no Game copy needed
+            game_copy.make_move(move);
             game_copy.update();
 
             auto result = alphabeta(game_copy, depth - 1, alpha, beta, false);
 
-            game_copy.undo_move();       // restore board state
+            game_copy.undo_move();
 
             if (result.score > best_score) {
                 best_score = result.score;
                 best_moves.clear();
+                best_pvs.clear();
                 best_moves.push_back(move);
+                // PV = this move + child's PV
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
             } else if (std::abs(result.score - best_score) < 0.01f) {
                 best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
             }
 
             alpha = std::max(alpha, best_score);
-            if (beta <= alpha) break;  // Beta cutoff
+            if (beta <= alpha) break;
         }
 
         if (!best_moves.empty()) {
             std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
-            best_move = best_moves[dist(rng)];
+            size_t chosen = dist(rng);
+            best_move = best_moves[chosen];
+            best_pv = std::move(best_pvs[chosen]);
         }
 
         transposition_table[hash] = {best_score, depth};
-        return {best_score, best_move};
+        return {best_score, best_move, std::move(best_pv)};
     } else {
         float best_score = std::numeric_limits<float>::infinity();
         std::optional<Move> best_move;
+        std::vector<Move> best_pv;
         std::vector<Move> best_moves;
+        std::vector<std::vector<Move>> best_pvs;
 
         for (size_t i = 0; i < max_moves; ++i) {
             const auto& move = moves[i];
-            game_copy.make_move(move);   // make/unmake: no Game copy needed
+            game_copy.make_move(move);
             game_copy.update();
 
             auto result = alphabeta(game_copy, depth - 1, alpha, beta, true);
 
-            game_copy.undo_move();       // restore board state
+            game_copy.undo_move();
 
             if (result.score < best_score) {
                 best_score = result.score;
                 best_moves.clear();
+                best_pvs.clear();
                 best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
             } else if (std::abs(result.score - best_score) < 0.01f) {
                 best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
             }
 
             beta = std::min(beta, best_score);
-            if (beta <= alpha) break;  // Alpha cutoff
+            if (beta <= alpha) break;
         }
 
         if (!best_moves.empty()) {
             std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
-            best_move = best_moves[dist(rng)];
+            size_t chosen = dist(rng);
+            best_move = best_moves[chosen];
+            best_pv = std::move(best_pvs[chosen]);
         }
 
         transposition_table[hash] = {best_score, depth};
-        return {best_score, best_move};
+        return {best_score, best_move, std::move(best_pv)};
     }
 }
 
@@ -490,6 +513,323 @@ float EvolvableAI::evaluate_material(const Game& g) const {
             score -= value;
     }
     return score;
+}
+
+// ===== TDEvalAI =====
+TDEvalAI::TDEvalAI(Game& game, Color color, const std::vector<float>& weights, int depth)
+    : AlphaBetaAI(game, color, depth)
+    , weights(weights)
+{
+}
+
+float TDEvalAI::evaluate_material(const Game& g) const {
+    auto sparse = extract_td_features_sparse(g);
+    float score = 0.0f;
+    for (const auto& sf : sparse) {
+        if (sf.index < static_cast<int>(weights.size()))
+            score += weights[sf.index] * sf.value;
+    }
+    // Features are Gold-positive; flip for Scarlet so the maximizer always
+    // maximizes from its own perspective (matching BaseAI convention).
+    return (color == Color::GOLD) ? score : -score;
+}
+
+TDEvalAI::TDLeafResult TDEvalAI::choose_move_tdleaf() {
+    std::vector<Move> moves = game.get_all_moves();
+    if (moves.empty())
+        return {std::nullopt, {}, 0.0f};
+
+    nodes_searched = 0;
+    transposition_table.clear();
+
+    Game game_copy = game;
+    auto result = alphabeta(game_copy, max_depth,
+                            -std::numeric_limits<float>::infinity(),
+                            std::numeric_limits<float>::infinity(),
+                            true);
+
+    // Replay PV to reach the leaf position and extract features there.
+    Game leaf_game = game;
+    for (const auto& m : result.pv) {
+        leaf_game.make_move(m);
+        leaf_game.update();
+    }
+    auto leaf_features = extract_td_features_sparse(leaf_game);
+
+    // Minimax value from Gold's perspective (features are Gold-positive).
+    // AB returns score from `color`'s perspective, convert to Gold-positive.
+    float gold_value = (color == Color::GOLD) ? result.score : -result.score;
+
+    auto best_move = result.move.has_value() ? result.move
+                                             : std::optional<Move>(moves[0]);
+    return {best_move, std::move(leaf_features), gold_value};
+}
+
+// ===== NNEvalAI =====
+NNEvalAI::NNEvalAI(Game& game, Color color, const NNWeights& nn, int depth)
+    : AlphaBetaAI(game, color, depth)
+    , nn(nn)
+{
+}
+
+void NNEvalAI::acc_init(const Game& g) const {
+    auto sparse = extract_td_features_sparse(g);
+    NNAccumulator acc;
+    nn.compute_h1(sparse, acc.h1.data());
+    acc_stack.clear();
+    acc_stack.push_back(acc);
+    acc_valid = true;
+}
+
+void NNEvalAI::acc_push_move(const Game& g_before_move, const Move& m) const {
+    // Copy current accumulator
+    NNAccumulator acc = acc_stack.back();
+
+    auto [from_idx, to_idx, flag] = m;
+    int16_t moving_piece = g_before_move.board[from_idx];
+    int16_t captured_piece = g_before_move.board[to_idx];
+
+    bool mover_is_gold = (moving_piece > 0);
+    int mover_ptype = std::abs(moving_piece);
+    int mover_pt_idx = piece_type_to_idx(mover_ptype);
+    float mover_sign = mover_is_gold ? 1.0f : -1.0f;
+
+    // Remove piece from old square
+    if (mover_pt_idx >= 0) {
+        int old_feat = mover_pt_idx * TOTAL_SQUARES + from_idx;
+        nn.acc_remove_feature(acc.h1.data(), old_feat, mover_sign);
+    }
+
+    // Handle capture: remove captured piece
+    if ((flag == CAPTURE || flag == AFAR) && captured_piece != EMPTY) {
+        int cap_ptype = std::abs(captured_piece);
+        int cap_pt_idx = piece_type_to_idx(cap_ptype);
+        bool cap_is_gold = (captured_piece > 0);
+        float cap_sign = cap_is_gold ? 1.0f : -1.0f;
+        if (cap_pt_idx >= 0) {
+            int cap_feat = cap_pt_idx * TOTAL_SQUARES + to_idx;
+            nn.acc_remove_feature(acc.h1.data(), cap_feat, cap_sign);
+        }
+    }
+
+    // Add piece to new square (unless AFAR Dragon which stays in place)
+    bool dragon_afar = (flag == AFAR && mover_ptype == 3);
+    if (!dragon_afar && mover_pt_idx >= 0) {
+        int new_feat = mover_pt_idx * TOTAL_SQUARES + to_idx;
+        nn.acc_add_feature(acc.h1.data(), new_feat, mover_sign);
+    }
+    if (dragon_afar && mover_pt_idx >= 0) {
+        // Dragon didn't move, re-add at original square
+        int old_feat = mover_pt_idx * TOTAL_SQUARES + from_idx;
+        nn.acc_add_feature(acc.h1.data(), old_feat, mover_sign);
+    }
+
+    // Note: strategic features (indices >= N_PSQ) are NOT tracked incrementally.
+    // They change based on frozen state, king position, game progress, etc.
+    // For now we accept a small error on strategic features during search
+    // (they're a minor contribution) and recompute fully at the root.
+    // The piece-square features (the dominant 4032) are exact.
+
+    acc_stack.push_back(acc);
+}
+
+void NNEvalAI::acc_pop() const {
+    if (acc_stack.size() > 1)
+        acc_stack.pop_back();
+}
+
+float NNEvalAI::evaluate_material(const Game& g) const {
+    // Always use full forward pass (accumulator disabled for debugging).
+    auto sparse = extract_td_features_sparse(g);
+    float score = nn.forward(sparse);
+    // NN is trained on scores normalized by 50. Scale back to engine range
+    // so AB search sees magnitudes comparable to the handcrafted eval.
+    score *= 50.0f;
+    return (color == Color::GOLD) ? score : -score;
+}
+
+AlphaBetaAI::EvalResult NNEvalAI::alphabeta_nn(
+    Game& game_copy, int depth, float alpha, float beta, bool maximizing)
+{
+    nodes_searched++;
+
+    uint64_t hash = hash_position(game_copy);
+    auto it = transposition_table.find(hash);
+    if (it != transposition_table.end() && it->second.second >= depth) {
+        return {it->second.first, std::nullopt, {}};
+    }
+
+    std::vector<Move> moves = game_copy.get_all_moves();
+
+    if (depth == 0 || moves.empty() || game_copy.game_over) {
+        float score = evaluate_material(game_copy);
+        transposition_table[hash] = {score, depth};
+        return {score, std::nullopt, {}};
+    }
+
+    size_t max_moves = (depth <= 1) ? moves.size() : std::min(moves.size(), size_t(30));
+
+    // Move ordering
+    std::sort(moves.begin(), moves.end(), [&game_copy](const Move& a, const Move& b) {
+        int a_to = std::get<1>(a);
+        int b_to = std::get<1>(b);
+        int16_t a_target = game_copy.board[a_to];
+        int16_t b_target = game_copy.board[b_to];
+        bool a_capture = a_target != EMPTY;
+        bool b_capture = b_target != EMPTY;
+        if (a_capture != b_capture) return a_capture > b_capture;
+        if (a_capture && b_capture) {
+            int a_from = std::get<0>(a);
+            int b_from = std::get<0>(b);
+            float a_score = std::abs(a_target) * 10 - std::abs(game_copy.board[a_from]);
+            float b_score = std::abs(b_target) * 10 - std::abs(game_copy.board[b_from]);
+            return a_score > b_score;
+        }
+        return false;
+    });
+
+    if (maximizing) {
+        float best_score = -std::numeric_limits<float>::infinity();
+        std::optional<Move> best_move;
+        std::vector<Move> best_pv;
+        std::vector<Move> best_moves;
+        std::vector<std::vector<Move>> best_pvs;
+
+        for (size_t i = 0; i < max_moves; ++i) {
+            const auto& move = moves[i];
+            acc_push_move(game_copy, move);
+            game_copy.make_move(move);
+            game_copy.update();
+
+            auto result = alphabeta_nn(game_copy, depth - 1, alpha, beta, false);
+
+            game_copy.undo_move();
+            acc_pop();
+
+            if (result.score > best_score) {
+                best_score = result.score;
+                best_moves.clear();
+                best_pvs.clear();
+                best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
+            } else if (std::abs(result.score - best_score) < 0.01f) {
+                best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
+            }
+
+            alpha = std::max(alpha, best_score);
+            if (beta <= alpha) break;
+        }
+
+        if (!best_moves.empty()) {
+            std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
+            size_t chosen = dist(rng);
+            best_move = best_moves[chosen];
+            best_pv = std::move(best_pvs[chosen]);
+        }
+
+        transposition_table[hash] = {best_score, depth};
+        return {best_score, best_move, std::move(best_pv)};
+    } else {
+        float best_score = std::numeric_limits<float>::infinity();
+        std::optional<Move> best_move;
+        std::vector<Move> best_pv;
+        std::vector<Move> best_moves;
+        std::vector<std::vector<Move>> best_pvs;
+
+        for (size_t i = 0; i < max_moves; ++i) {
+            const auto& move = moves[i];
+            acc_push_move(game_copy, move);
+            game_copy.make_move(move);
+            game_copy.update();
+
+            auto result = alphabeta_nn(game_copy, depth - 1, alpha, beta, true);
+
+            game_copy.undo_move();
+            acc_pop();
+
+            if (result.score < best_score) {
+                best_score = result.score;
+                best_moves.clear();
+                best_pvs.clear();
+                best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
+            } else if (std::abs(result.score - best_score) < 0.01f) {
+                best_moves.push_back(move);
+                std::vector<Move> pv = {move};
+                pv.insert(pv.end(), result.pv.begin(), result.pv.end());
+                best_pvs.push_back(std::move(pv));
+            }
+
+            beta = std::min(beta, best_score);
+            if (beta <= alpha) break;
+        }
+
+        if (!best_moves.empty()) {
+            std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
+            size_t chosen = dist(rng);
+            best_move = best_moves[chosen];
+            best_pv = std::move(best_pvs[chosen]);
+        }
+
+        transposition_table[hash] = {best_score, depth};
+        return {best_score, best_move, std::move(best_pv)};
+    }
+}
+
+std::optional<Move> NNEvalAI::choose_move() {
+    std::vector<Move> moves = game.get_all_moves();
+    if (moves.empty()) return std::nullopt;
+
+    nodes_searched = 0;
+    transposition_table.clear();
+
+    Game game_copy = game;
+    acc_init(game_copy);
+
+    auto result = alphabeta_nn(game_copy, max_depth,
+                               -std::numeric_limits<float>::infinity(),
+                               std::numeric_limits<float>::infinity(),
+                               true);
+    acc_valid = false;
+    return result.move.has_value() ? result.move : moves[0];
+}
+
+NNEvalAI::TDLeafResult NNEvalAI::choose_move_tdleaf() {
+    std::vector<Move> moves = game.get_all_moves();
+    if (moves.empty())
+        return {std::nullopt, {}, 0.0f};
+
+    nodes_searched = 0;
+    transposition_table.clear();
+
+    Game game_copy = game;
+    acc_init(game_copy);
+
+    auto result = alphabeta_nn(game_copy, max_depth,
+                               -std::numeric_limits<float>::infinity(),
+                               std::numeric_limits<float>::infinity(),
+                               true);
+    acc_valid = false;
+
+    // Replay PV to get leaf features for training
+    Game leaf_game = game;
+    for (const auto& m : result.pv) {
+        leaf_game.make_move(m);
+        leaf_game.update();
+    }
+    auto leaf_features = extract_td_features_sparse(leaf_game);
+    float gold_value = (color == Color::GOLD) ? result.score : -result.score;
+
+    auto best_move = result.move.has_value() ? result.move
+                                             : std::optional<Move>(moves[0]);
+    return {best_move, std::move(leaf_features), gold_value};
 }
 
 } // namespace dragonchess
