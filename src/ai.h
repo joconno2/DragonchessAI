@@ -105,8 +105,13 @@ public:
 
     std::optional<Move> choose_move() override;
 
+    // Iterative deepening with time limit (milliseconds). Searches d=1,2,3,...
+    // until time runs out. Returns best move from deepest completed search.
+    std::optional<Move> choose_move_timed(float time_limit_ms);
+
     void set_max_depth(int d) { max_depth = d; }
     void clear_tt() { transposition_table.clear(); }
+    int get_last_depth() const { return last_search_depth; }
 
     // Run AB search on a game copy and return the score.
     float search_score(Game& game_copy, int depth) {
@@ -121,6 +126,7 @@ public:
 protected:
     int max_depth;
     int nodes_searched;  // For statistics
+    int last_search_depth = 0;
     std::mt19937 rng;    // For tie-breaking
     std::unordered_map<uint64_t, std::pair<float, int>> transposition_table;
 

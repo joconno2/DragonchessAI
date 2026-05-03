@@ -11,6 +11,7 @@ namespace dragonchess {
 struct AIConfig {
     std::string type;  // "random", "greedy", "greedyvalue", "minimax", "alphabeta", "plugin", "evolvable"
     int depth = 2;     // For minimax/alphabeta/evolvable
+    float time_per_move_ms = 0.0f;  // If > 0, use iterative deepening with time limit
     std::string name;  // Optional custom name
     std::string plugin_path;  // Path to .so file for plugin type
     std::vector<float> weights;  // For evolvable: 14 piece-value weights (no King)

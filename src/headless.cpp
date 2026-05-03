@@ -87,8 +87,20 @@ MatchResult run_headless_match(const AIConfig& gold_config, const AIConfig& scar
     
     // Play game at maximum speed (no delays, no rendering)
     while (!game.game_over && move_count < max_moves) {
-        auto move = (game.current_turn == Color::GOLD) ? 
-                    gold_ai->choose_move() : scarlet_ai->choose_move();
+        std::optional<Move> move;
+        if (game.current_turn == Color::GOLD) {
+            auto* ab = dynamic_cast<AlphaBetaAI*>(gold_ai.get());
+            if (ab && gold_config.time_per_move_ms > 0)
+                move = ab->choose_move_timed(gold_config.time_per_move_ms);
+            else
+                move = gold_ai->choose_move();
+        } else {
+            auto* ab = dynamic_cast<AlphaBetaAI*>(scarlet_ai.get());
+            if (ab && scarlet_config.time_per_move_ms > 0)
+                move = ab->choose_move_timed(scarlet_config.time_per_move_ms);
+            else
+                move = scarlet_ai->choose_move();
+        }
         
         if (move.has_value()) {
             int prev_no_capture = game.no_capture_count;

@@ -1,4 +1,5 @@
 #include "headless.h"
+#include "mcts.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -191,6 +192,20 @@ static int run_headless_mode(int argc, char* argv[]) {
             output_csv = argv[++i];
         } else if (arg == "--output-json" && i + 1 < argc) {
             output_json = argv[++i];
+        } else if (arg == "--time-per-move" && i + 1 < argc) {
+            float tpm = std::atof(argv[++i]);
+            gold_config.time_per_move_ms = tpm;
+            scarlet_config.time_per_move_ms = tpm;
+        } else if (arg == "--gold-time-per-move" && i + 1 < argc) {
+            gold_config.time_per_move_ms = std::atof(argv[++i]);
+        } else if (arg == "--scarlet-time-per-move" && i + 1 < argc) {
+            scarlet_config.time_per_move_ms = std::atof(argv[++i]);
+        } else if (arg == "--mcts-simulations" && i + 1 < argc) {
+            // Parsed below if mode == "mcts-selfplay"
+            // Just consume the arg here to avoid "unknown option" error.
+            ++i;
+        } else if (arg == "--mcts-nn-weights" && i + 1 < argc) {
+            ++i;
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg == "--quiet") {
@@ -205,8 +220,8 @@ static int run_headless_mode(int argc, char* argv[]) {
         }
     }
 
-    // selfplay and genlabels don't need explicit AI configs
-    if (mode != "selfplay" && mode != "genlabels" &&
+    // selfplay, genlabels, mcts-selfplay don't need explicit AI configs
+    if (mode != "selfplay" && mode != "genlabels" && mode != "mcts-selfplay" &&
         (gold_config.type.empty() || scarlet_config.type.empty())) {
         std::cerr << "Error: Both --gold-ai and --scarlet-ai are required\n" << std::endl;
         print_usage(argv[0]);
@@ -214,7 +229,7 @@ static int run_headless_mode(int argc, char* argv[]) {
     }
 
     // Modes that write pure NDJSON to stdout need quiet output.
-    if (mode == "selfplay" || mode == "genlabels") quiet = true;
+    if (mode == "selfplay" || mode == "genlabels" || mode == "mcts-selfplay") quiet = true;
 
     if (!quiet) {
         std::cout << "=== Dragonchess Headless Mode ===" << std::endl;
@@ -277,11 +292,78 @@ static int run_headless_mode(int argc, char* argv[]) {
         }
     } else if (mode == "genlabels") {
         // Generate search-supervised training labels (NNUE approach).
-        // Plays games with random openings, labels each position with AB(label_depth).
         run_genlabels_batch(num_games, label_depth, random_plies, num_threads, std::cout);
         return 0;
+    } else if (mode == "mcts-selfplay") {
+        // AlphaZero-style MCTS self-play. Outputs NDJSON training data.
+        int mcts_sims = 400;
+        std::string mcts_nn_path;
+
+        // Re-parse for MCTS-specific args
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--mcts-simulations" && i + 1 < argc)
+                mcts_sims = std::atoi(argv[++i]);
+            else if (arg == "--mcts-nn-weights" && i + 1 < argc)
+                mcts_nn_path = argv[++i];
+        }
+
+        // Load dual-head NN weights
+        DualHeadWeights nn;
+        if (!mcts_nn_path.empty()) {
+            std::ifstream wf(mcts_nn_path, std::ios::binary);
+            if (!wf) {
+                std::cerr << "Cannot open MCTS NN weights: " << mcts_nn_path << std::endl;
+                return 1;
+            }
+            wf.seekg(0, std::ios::end);
+            size_t bytes = wf.tellg();
+            wf.seekg(0);
+            std::vector<float> flat(bytes / sizeof(float));
+            wf.read(reinterpret_cast<char*>(flat.data()), bytes);
+            if (!nn.from_flat(flat)) {
+                std::cerr << "mcts-selfplay: expected " << DualHeadWeights::total_params()
+                          << " weights, got " << flat.size() << std::endl;
+                return 1;
+            }
+        }
+        // If no weights provided, nn is zero-initialized (random play with uniform policy)
+
+        // Run self-play games and output NDJSON
+        for (int g = 0; g < num_games; ++g) {
+            auto game_data = run_mcts_selfplay(nn, mcts_sims, 1.0f, 30, 500);
+
+            // Output each position as NDJSON
+            for (const auto& pos : game_data.positions) {
+                std::ostringstream ss;
+                ss << "{\"i\":[";
+                for (size_t j = 0; j < pos.features.size(); ++j) {
+                    if (j > 0) ss << ',';
+                    ss << pos.features[j].index;
+                }
+                ss << "],\"v\":[";
+                for (size_t j = 0; j < pos.features.size(); ++j) {
+                    if (j > 0) ss << ',';
+                    ss << pos.features[j].value;
+                }
+                ss << "],\"pa\":[";
+                for (size_t j = 0; j < pos.mcts_policy.size(); ++j) {
+                    if (j > 0) ss << ',';
+                    ss << pos.mcts_policy[j].first;
+                }
+                ss << "],\"pp\":[";
+                for (size_t j = 0; j < pos.mcts_policy.size(); ++j) {
+                    if (j > 0) ss << ',';
+                    ss << pos.mcts_policy[j].second;
+                }
+                ss << "],\"z\":" << pos.outcome << "}";
+                std::cout << ss.str() << '\n';
+            }
+        }
+        std::cout.flush();
+        return 0;
     } else {
-        std::cerr << "Unknown mode: " << mode << " (use 'match', 'tournament', 'selfplay', or 'genlabels')" << std::endl;
+        std::cerr << "Unknown mode: " << mode << std::endl;
         return 1;
     }
 

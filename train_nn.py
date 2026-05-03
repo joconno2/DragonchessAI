@@ -55,21 +55,16 @@ log = logging.getLogger("train_nn")
 # NN model (PyTorch)
 # ---------------------------------------------------------------------------
 
-class ClippedReLU(nn.Module):
-    def forward(self, x):
-        return torch.clamp(x, 0.0, 1.0)
-
-
 class NNEval(nn.Module):
-    """4060 → 256 → 32 → 1 with clipped ReLU."""
+    """32284 → 512 → 64 → 1 with ReLU (matches C++ nn_eval.h)."""
 
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(N_INPUT, N_H1),
-            ClippedReLU(),
+            nn.ReLU(),
             nn.Linear(N_H1, N_H2),
-            ClippedReLU(),
+            nn.ReLU(),
             nn.Linear(N_H2, 1),
         )
 
@@ -559,7 +554,7 @@ def main():
     if latest_path.exists() and not args.cold_start:
         try:
             ckpt = json.loads(latest_path.read_text())
-            if ckpt.get("type") == "nn" and ckpt.get("n_params") == NNEval.total_params():
+            if ckpt.get("n_params") == NNEval.total_params():
                 model.from_flat_numpy(
                     np.array(ckpt["nn_weights"], dtype=np.float32))
                 model = model.to(DEVICE)
