@@ -24,6 +24,7 @@ if(HEADLESS_ONLY)
         src/headless.cpp
         src/simple_ai.cpp
         src/ai_plugin.cpp
+        src/mcts.cpp
     )
 
     add_executable(dragonchess ${SOURCES})

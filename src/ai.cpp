@@ -479,6 +479,41 @@ std::optional<Move> AlphaBetaAI::choose_move() {
     return result.move.has_value() ? result.move : moves[0];
 }
 
+std::optional<Move> AlphaBetaAI::choose_move_timed(float time_limit_ms) {
+    std::vector<Move> moves = game.get_all_moves();
+    if (moves.empty()) return std::nullopt;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    std::optional<Move> best_move = moves[0];
+    last_search_depth = 0;
+
+    // Iterative deepening: search d=1, d=2, ... until time runs out.
+    // TT persists across depths (helps deeper searches).
+    transposition_table.clear();
+
+    for (int d = 1; d <= 20; ++d) {
+        nodes_searched = 0;
+        Game game_copy = game;
+        auto result = alphabeta(game_copy, d,
+                               -std::numeric_limits<float>::infinity(),
+                                std::numeric_limits<float>::infinity(),
+                                true);
+
+        auto now = std::chrono::high_resolution_clock::now();
+        float elapsed_ms = std::chrono::duration<float, std::milli>(now - start).count();
+
+        if (result.move.has_value()) {
+            best_move = result.move;
+            last_search_depth = d;
+        }
+
+        // Stop if we've used more than half the budget (next depth would likely overflow)
+        if (elapsed_ms > time_limit_ms * 0.5f) break;
+    }
+
+    return best_move;
+}
+
 // ===== EvolvableAI =====
 // Piece type -> weight index (King excluded, fixed at 10000):
 //   1=Sylph→0, 2=Griffin→1, 3=Dragon→2, 4=Oliphant→3, 5=Unicorn→4,
@@ -642,9 +677,7 @@ float NNEvalAI::evaluate_material(const Game& g) const {
     // Always use full forward pass (accumulator disabled for debugging).
     auto sparse = extract_td_features_sparse(g);
     float score = nn.forward(sparse);
-    // NN is trained on scores normalized by 50. Scale back to engine range
-    // so AB search sees magnitudes comparable to the handcrafted eval.
-    score *= 50.0f;
+    // NN output is on raw AB score scale (centipawns). No rescaling needed.
     return (color == Color::GOLD) ? score : -score;
 }
 
