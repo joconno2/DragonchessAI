@@ -1,21 +1,21 @@
 # DragonchessAI Research Plan
 
-## Status (2026-05-03)
+## Status (2026-05-06)
 
-### Running Now
+**Parked for summer.** CoG Short (May 14) dropped. Target: Springer chapter revision (ICAART post-publication), summer 2026.
 
-**AlphaZero self-play training** on Ray cluster (200 actors, 268 CPUs).
-- tmux `alphazero` on mega_knight
-- 200 games/iteration, 200 MCTS sims/move, ~6.5 min/iteration
-- Training on GPU (Titan X), self-play on cluster
-- Target: 200 iterations
+The summer goal is a 30%+ improvement over the ICAART 2026 baseline. The adversarial TD approach already showed 42% WR vs AB(d=2) at peak (31.5% on 200-game eval). Stabilizing that is the path.
 
-**Timed baselines** running on mega_knight.
-- tmux `timed` on mega_knight
-- 500ms per move, iterative deepening, 100 games per matchup
-- AB(timed) vs AB(timed) as anchor, plus NN variants
+---
 
-### Completed Baselines (Fixed Depth, 200 games each)
+## What Exists
+
+### Engine
+- Full C++ Dragonchess engine with headless CLI, AB search (d=1 through d=6+), MCTS, tournament mode
+- Repo: `joconno2/DragonchessAI` (engine), `joconno2/DragonchessAI-Research` (training)
+- Build: `cmake -DHEADLESS_ONLY=ON`, must build on Ubuntu 22.04 for cluster GLIBC compat
+
+### Baselines (200 games each, fixed depth)
 
 | Player | vs AB(d=1) | vs AB(d=2) | vs AB(d=3) |
 |--------|-----------|-----------|-----------|
@@ -29,72 +29,121 @@
 | NN-Adversarial(d=1) | 40.0% | 12.5% | 10.0% |
 | NN-Adversarial(d=2) | 59.5% | 31.5% | 22.5% |
 
-**Key insight:** NN-Adversarial(d=2) gets 31.5% vs AB(d=2) on 200 games. The old 42% from 50-game evals was noisy. AB(d=3) gets 65% vs AB(d=2). That's the bar.
+### Datasets
+- d=4: 507K positions, 5 min to generate (1590 pos/s)
+- d=6: 1M positions, 13 hours (21 pos/s, ~8% actor error rate)
+- Format: compact binary (sparse features + AB score label)
+- Generated via Ray cluster with `generate_dataset.py`
 
-### What Was Built (May 2-3)
+### Trained Checkpoints
+- **Supervised d=4 (100 epochs):** RMSE 1.85 cp, 0.997 correlation. 0% WR. Passive play.
+- **Supervised d=6 (30 epochs):** Similar convergence. 0% WR.
+- **Adversarial TD v5:** Peak 42% WR vs AB(d=2) at batch 70 (50-game eval). Collapsed to 15%. 200-game eval: 31.5%.
+- All on mega_knight at `/home/mega_knight/DragonchessAI/results/`
 
-**Offline dataset generation pipeline:**
-- `generate_dataset.py`: Ray-distributed AB label generation, compact binary format
-- d=4 dataset: 507K positions in 5 minutes (1590 pos/s, 0 errors)
-- d=6 dataset: 1M positions in 13 hours (21 pos/s, ~8% actor error rate)
+### Infrastructure
+- HTCondor cluster: 44 machines, 540 CPUs. Container image `aall/dragonchess` in local registry.
+- Condor AlphaZero driver + worker scripts in `~/research/condor/examples/`
+- Usage logger + dashboard running on mega_knight (systemd, port 8401)
 
-**Epoch-based supervised training:**
-- `train_epochs.py`: loads binary dataset, trains in epochs with shuffling, val split, cosine LR
-- v2 architecture (32284 -> 512 -> 64 -> 1, 16.6M params) with ReLU (not ClippedReLU)
-- d=4 100 epochs: RMSE 1.85 cp, 0.997 correlation with AB scores, but 0% WR vs AB(d=2)
-- d=6 30+ epochs: similar convergence, no improvement in WR
+---
 
-**Adversarial TD fine-tuning:**
-- Modified `train_nn.py` for v2 architecture with ReLU
-- Loads supervised checkpoint, trains against AB(d=2) via TDLeaf
-- Peak 42% WR vs AB(d=2) at batch 70 (50-game eval), collapsed to ~15%
-- 200-game eval: 31.5% vs AB(d=2)
+## What Didn't Work
 
-**AlphaZero pipeline:**
-- `src/mcts.h/cpp`: MCTS with PUCT selection, Dirichlet noise, temperature scheduling
-- `src/mcts.h`: DualHeadWeights (256x128 trunk + policy head + value head, 19M params)
-- `train_alphazero.py`: full self-play loop with Ray cluster for game generation, GPU training
-- Sparse policy loss (avoids materializing 82K-wide tensors)
-- C++ `--mode mcts-selfplay` outputs NDJSON training data
+### Supervised training (0% WR at any depth)
+NN predicts AB scores with 0.997 correlation but plays passively. Knows position values but won't pursue captures. Games go 300+ moves and draw. Deeper labels (d=6) didn't help. The NN approximates the handcrafted eval but can't exceed it because the labels come from that eval.
 
-**Time-controlled tournaments:**
-- Iterative deepening with `--time-per-move` flag
-- `choose_move_timed()` in AlphaBetaAI: searches d=1,2,3,... until time budget exhausted
-- `run_timed_baselines.py`: fair comparison at equal thinking time
+### Adversarial TD (collapses after peak)
+TDLeaf against AB(d=2) peaks at 42% WR then oscillates down. The 16.6M param v2 network is too sensitive to online gradient updates. Same collapse pattern with the old v1 linear model (peaked 67%, collapsed due to AdaGrad accumulation). The approach works briefly but is unstable.
 
-**Comprehensive baselines:**
-- `run_baselines.py`: all players vs AB(d=1,2,3), 200 games each, Wilson CIs
-- `run_timed_baselines.py`: time-controlled version
+### AlphaZero MCTS (0% WR at all sim counts)
 
-### Bugs Found and Fixed
+Two runs attempted:
+1. **Ray cluster (May 3-4):** 200 sims, 200 iters, 21.5 hours. 0% WR. Policy loss converged to near-zero (memorized garbage MCTS policy from insufficient sims).
+2. **Condor cluster (May 6):** 800 sims, 13 iters, ~6 hours. 0% WR at iter 10 eval.
 
-1. **ClippedReLU vs ReLU mismatch:** Python trained with ClippedReLU (clamp [0,1]) but C++ used regular ReLU. Network couldn't output values > ~12, targets were up to 104. Fixed to ReLU everywhere.
+**MCTS strength test (May 6):** Tested 200/800/3200 sims with trained and random weights vs AB(d=1) and AB(d=2). 20 games per condition. **0/240 games won across all conditions.** MCTS cannot play this game at any tested sim count.
 
-2. **C++ `score *= 50.0f`:** Leftover from old normalized training. NN output was rescaled 50x in C++, compressing useful resolution near zero. Removed.
+Root cause: Dragonchess has 108 avg legal moves (vs chess 35). MCTS with a flat value function degenerates to breadth-first random search. AB(d=1) with material counting beats that trivially. The chicken-and-egg problem (need good values to play good games, need good games to learn values) doesn't bootstrap at feasible sim counts.
 
-3. **Runtime_env packaging:** data/ directory (600MB) was included in Ray working_dir package. Added to EXCLUDE_DIRS.
+### Bugs found
+1. ClippedReLU vs ReLU mismatch between Python training and C++ inference
+2. C++ `score *= 50.0f` leftover compressing NN output near zero
+3. Runtime_env packaging included 600MB data/ directory
 
-### What Didn't Work
+---
 
-**Supervised training alone can't beat AB(d=2).** The NN predicts AB scores with 0.997 correlation and 1.85 cp RMSE, but plays passively. It knows the value of positions but won't pursue captures. The d=4 labels tell the NN "this position is slightly better" but not "capture the piece to GET to that position." Games go 300+ moves and draw.
+## Summer Plan: Stabilize Adversarial Training
 
-**Deeper labels (d=6) didn't help.** Same passive play, similar convergence. The NN approximates the handcrafted eval's judgment but can't exceed it because the labels come from that eval.
+The adversarial TD approach is the only one that showed real playing strength (42% peak). The problem is instability, not capability. Plan:
 
-**Adversarial fine-tuning collapses.** TDLeaf against AB(d=2) peaks at ~42% WR then oscillates down to 15%. The 16.6M parameter network is too sensitive to online gradient updates. Same collapse pattern as the old v1 architecture.
+### Phase 1: Stabilize TD training
+- **Periodic optimizer resets.** Train for N batches, snapshot best WR, reset AdamW state, resume from best weights. Prevents gradient accumulator drift.
+- **Smaller learning rate schedule.** Cosine anneal from 0.001 to 0.0001 over each reset cycle.
+- **Population-based approach.** Maintain 4-8 training runs in parallel (on Condor). Select and mutate the best. This is ES-adjacent and fits the AALL thesis.
+- **Smaller network.** The 16.6M param network may be overkill. Test 32284->256->32->1 (8.3M params) and 32284->128->16->1 (4.2M params).
 
-### Next Steps
+### Phase 2: ES fine-tuning of supervised checkpoint
+- Start from the d=6 supervised checkpoint (0.997 correlation, 0% WR)
+- CMA-ES or OpenES on the last layer weights only (64x1 = 64 params for the small net)
+- Fitness: WR vs AB(d=2) over 50 games
+- Run on Condor cluster (each eval = 50 tournament games in container)
+- This is a direct application of AALL methods (ES for game AI) on a novel domain
 
-1. **AlphaZero training** (running now). Self-play discovers strategies the handcrafted eval doesn't know. MCTS + policy/value network is the established approach for this class of game. Target: >50% WR vs AB(d=2) at equal time.
+### Phase 3: Evaluation
+- 200-game tournaments vs AB(d=1,2,3) at fixed depth
+- Time-controlled tournaments (500ms/move) for fair comparison
+- Wilson confidence intervals on all WR numbers
 
-2. **Timed baseline table** (running now). Honest comparison at equal thinking time. AB iterative deepening reaches d=3-4 in 500ms. NN reaches d=1-2 in the same time. MCTS gets ~200 simulations.
+### Target result
+- 50%+ WR vs AB(d=2) (up from ICAART baseline)
+- Stable (doesn't collapse over continued training)
+- Enough for the Springer chapter revision
 
-3. **Scale MCTS simulations.** Current 200 sims is low. AlphaZero used 800 for chess. More sims = stronger play but slower iteration. Increase once the training loop is validated.
+---
 
-4. **Network architecture upgrade.** Current architecture is fully connected (sparse input). A convolutional network on the 3x8x12 board would capture spatial patterns better. Future work once the FC version shows learning.
+## Writing Needed (Springer Chapter)
 
-### Paper Target
+The ICAART 2026 paper was selected for Springer post-publication. The chapter needs to extend the conference paper with new results. Here's what to write:
 
-**CoG Short Paper (May 14) or AIIDE (Jun 26).** The paper needs a positive result: AlphaZero-style MCTS beating classical alpha-beta at equal time. The comprehensive baseline table provides the comparison framework. If AlphaZero doesn't work in time, this project doesn't have a paper yet.
+### New sections to add
+1. **Extended evaluation methodology.** The baseline table (8 players x 3 depths x 200 games) that didn't exist in the ICAART paper. Time-controlled tournaments.
+2. **Neural network evaluation function.** Architecture (v2, 32K sparse features, king-bucket), supervised training pipeline, the eval-vs-play gap analysis (0.997 correlation but 0% WR).
+3. **Adversarial fine-tuning.** TDLeaf training, peak results, collapse analysis, stabilization approach.
+4. **AlphaZero investigation.** MCTS implementation, the branching factor problem (108 avg legal moves), the strength test showing 0/240 at all sim counts. This is important context for why classical search still dominates in high-branching variants.
+5. **ES-based training** (Phase 2 results, when complete). CMA-ES on the supervised checkpoint. Direct application of EC to the eval function.
+
+### Sections to revise from ICAART paper
+- Feature representation: update to v2 architecture (32K features vs original)
+- Training: replace old TD(lambda) linear model with the full NN pipeline
+- Results: comprehensive baselines replace the limited original comparison
+
+### Figures needed
+- Convergence plots (supervised: loss + correlation over epochs; adversarial: WR over batches showing peak and collapse)
+- Baseline WR heatmap (players x depths)
+- Architecture diagram (sparse features -> trunk -> eval head)
+- MCTS strength test plot (sims vs WR, flat line at 0%)
+- ES training curve (when complete)
+
+### Tables needed
+- Full baseline matrix (already have data)
+- Supervised training metrics (have data)
+- MCTS strength test (have data)
+- Architecture comparison (params, inference time, WR)
+- Time-controlled results (have data from timed baselines run)
+
+### Data that exists and is ready
+- All baseline tournaments (200 games each): `run_baselines.py` output
+- Supervised training logs: `results/nn_v2_epochs_d4/`, `results/nn_v2_epochs_d6/`
+- Adversarial training logs: `results/nn_adversarial_v5/`
+- AlphaZero logs: `results/alphazero/`, `results/az_condor_v1/`
+- MCTS strength test: ran May 6, need to save output formally
+- Timed baselines: `results/timed_baselines/`
+
+### Data that needs to be generated (summer)
+- ES fine-tuning results (Phase 2)
+- Stabilized adversarial results (Phase 1)
+- Possibly: smaller network variants
 
 ---
 
@@ -109,24 +158,24 @@
 ### Pieces: signed int16, positive = Gold, negative = Scarlet
 Sylph(1), Griffin(2), Dragon(3), Oliphant(4), Unicorn(5), Hero(6), Thief(7), Cleric(8), Mage(9), King(10), Paladin(11), Warrior(12), Basilisk(13), Elemental(14), Dwarf(15)
 
-### Move: tuple<int, int, MoveFlag> = (from_sq, to_sq, flag)
-MoveFlag: QUIET(0), CAPTURE(1), AFAR(2), AMBIGUOUS(3), THREED(4)
+### Move encoding: from_sq * 288 + to_sq = 82,944 actions
+Average legal moves per position: 108 (range 67-140)
 
-### Action encoding (for policy network): from_sq * 288 + to_sq = 82,944
+### v2 Network: 32284 -> 512 -> 64 -> 1 (16.6M params)
+- Input: king-bucket sparse features (32284 dims)
+- ReLU activations throughout
+- AlphaZero variant: 32284 -> 256 -> 128 -> {policy(82944), value(1)} (19M params)
 
-### Build notes
-- Headless binary must be built with `-DHEADLESS_ONLY=ON`
-- Workers on the Ray cluster need GLIBC 2.35 compatible binary (build on grid or Ubuntu 22.04)
-- mega_knight has cmake/g++ and can build directly
-
-### Checkpoint formats
-- **NN supervised:** JSON with `nn_weights` flat array (16,562,817 floats)
-- **NN adversarial:** Same format, `type: "nn"`
-- **AlphaZero:** Binary weights file (19M floats) + JSON metadata
+### Build
+```bash
+# Headless (training/experiments)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DHEADLESS_ONLY=ON
+cmake --build build --parallel $(nproc)
+```
+Must build on Ubuntu 22.04 for GLIBC 2.35 compatibility with cluster workers.
 
 ### Machines
-- mega_knight (136.244.224.136): Ray head, GTX Titan X x2, build tools
-- Grid (136.244.224.30): SSH jump host only, 1 core
+- mega_knight (136.244.224.136): Condor CM, GTX Titan X x2, build tools
+- Condor cluster: 44 machines, 540 CPUs, container universe
 - Threadripper (136.244.224.45): 64 cores, RTX 5090
 - Vertex (136.244.224.117): 8 cores, RTX 5090
-- 12+ NLH214 lab machines: Ray workers (8-24 cores each)
