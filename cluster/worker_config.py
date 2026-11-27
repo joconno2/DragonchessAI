@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_CLUSTER_USERNAME = "dgezgin"
-DEFAULT_CLUSTER_PASSWORD = "REDACTED"
+DEFAULT_CLUSTER_PASSWORD = os.environ.get("AALL_CLUSTER_PASSWORD", "")  # never commit the value
 
 
 def normalize(value: object) -> str:
